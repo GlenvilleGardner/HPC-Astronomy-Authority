@@ -1,0 +1,4 @@
+skyfield
+fastapi
+uvicorn
+numpy
