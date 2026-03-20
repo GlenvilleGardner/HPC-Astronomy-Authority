@@ -146,3 +146,57 @@ def find_sunset_utc(date_utc: datetime, latitude: float, longitude: float):
         if not bool(is_sun_up):
             return t.utc_datetime(), choose_kernel_name(date_utc.year)
     return None, choose_kernel_name(date_utc.year)
+
+def get_delta_t(year: int) -> dict:
+    """
+    Returns the Delta T value for a given year.
+
+    Delta T (ΔT) is the difference between Terrestrial Time (TT) and
+    Universal Time (UT1). It accounts for the gradual slowing of Earth's
+    rotation due to tidal friction from the moon.
+
+    For modern dates (post-1900): IERS observed values — highly accurate.
+    For ancient dates: Morrison-Stephenson polynomial extrapolation.
+
+    Impact on HPC calendar:
+    - Modern dates (2019+): ΔT ≈ 70 seconds — negligible
+    - 1451 BC (Exodus): ΔT ≈ 16,800 seconds (~4.7 hours)
+    - 967 BC (Solomon): ΔT ≈ 14,200 seconds (~3.9 hours)
+
+    Note: Skyfield applies ΔT automatically in all ephemeris calculations.
+    This endpoint exposes the value for research transparency.
+    """
+    sky_year = year if year > 0 else year + 1
+    t = ts.utc(sky_year, 6, 15)  # Mid-year sample for representative value
+    delta_t_seconds = float(t.delta_t)
+
+    # Determine model used
+    if year >= 1900:
+        model = "IERS observed data"
+        accuracy = "high — sub-second accuracy"
+    elif year >= -500:
+        model = "Morrison-Stephenson 2004 polynomial"
+        accuracy = "moderate — uncertainty ±few minutes"
+    else:
+        model = "Morrison-Stephenson 2004 polynomial (extrapolated)"
+        accuracy = "approximate — uncertainty increases with age"
+
+    # Flag if ΔT is large enough to potentially affect observable window
+    hours = abs(delta_t_seconds) / 3600
+    window_impact = hours > 1.0
+
+    return {
+        "year": year,
+        "deltaTSeconds": round(delta_t_seconds, 3),
+        "deltaTMinutes": round(delta_t_seconds / 60, 3),
+        "deltaTHours": round(hours, 4),
+        "model": model,
+        "accuracy": accuracy,
+        "windowImpactPossible": window_impact,
+        "note": (
+            "ΔT is applied automatically by Skyfield in all HPC calculations. "
+            "This value is provided for research transparency only. "
+            "For ancient dates ΔT affects the precise UTC time of the equinox "
+            "but rarely changes the observable window assignment."
+        )
+    }

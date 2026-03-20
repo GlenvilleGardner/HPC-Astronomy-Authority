@@ -6,7 +6,8 @@ from astronomy_solver import (
     find_equinox,
     find_season_events,
     find_sunset_utc,
-    get_default_kernel_name
+    get_default_kernel_name,
+    get_delta_t
 )
 
 app = FastAPI(title="HPC Astronomy Authority")
@@ -17,6 +18,24 @@ def health():
         "status": "ok",
         "defaultKernel": get_default_kernel_name()
     }
+
+@app.get("/delta-t/{year}")
+def delta_t(year: int):
+    try:
+        result = get_delta_t(year)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/delta-t-bce/{year}")
+def delta_t_bce(year: int):
+    try:
+        astro_year = -(year - 1)
+        result = get_delta_t(astro_year)
+        result["bceYear"] = year
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/equinox/{year}")
 def equinox(year: str):
