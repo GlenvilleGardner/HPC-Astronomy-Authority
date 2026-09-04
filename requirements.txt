@@ -1,4 +1,18 @@
-skyfield
-fastapi
-uvicorn
-numpy
+# HPC Astronomy Authority - DIRECT project dependencies.
+#
+# These are the packages the Authority intentionally depends upon. The
+# complete resolved runtime closure, including every transitive dependency,
+# is recorded separately in requirements.lock.cp313-win_amd64.txt.
+#
+# Exact pins are deliberate: Skyfield 1.54 and the IERS/Delta-T data it
+# bundles are scientifically causal inputs to sunset determination.
+#
+# numpy is pinned here even though no Authority module imports it directly.
+# It arrives transitively through skyfield and jplephem, and it is a
+# scientifically causal dependency, so it is declared explicitly rather than
+# left to a resolver.
+
+skyfield==1.54
+fastapi==0.135.1
+uvicorn==0.41.0
+numpy==2.4.3
