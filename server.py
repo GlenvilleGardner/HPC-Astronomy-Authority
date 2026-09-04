@@ -1,6 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from datetime import datetime, timezone
-from astronomy_solver import (
+
+from runtime_enforcement import verify_runtime_scientific_components
+
+# Certify the scientific runtime before any astronomy is loaded.
+# astronomy_solver constructs its Skyfield timescale from the bundled
+# Delta-T table at module import, so the gate must run first: an
+# uncertified runtime must never build a timescale. The astronomy import
+# below is therefore deliberately late.
+verify_runtime_scientific_components()
+
+from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     solar_longitude,
     subsolar_point,
     find_equinox,
