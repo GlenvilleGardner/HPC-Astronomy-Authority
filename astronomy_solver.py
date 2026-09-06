@@ -1,8 +1,12 @@
+import math
 import os
+from collections import namedtuple
 from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from skyfield.api import load, wgs84
 from skyfield import almanac
+
+from scientific_environment import ScientificEnvironmentError
 
 PRIMARY_KERNEL = os.getenv("HPC_EPHEMERIS_PRIMARY", "de440.bsp")
 ANCIENT_KERNEL = os.getenv("HPC_EPHEMERIS_ANCIENT", "de441_part-1.bsp")
@@ -243,6 +247,146 @@ def find_next_sunset_after_utc(after_utc: datetime, latitude: float, longitude: 
                 return sunset_dt, choose_kernel_name(after_utc.year)
 
     return None, choose_kernel_name(after_utc.year)
+
+
+# ---------------------------------------------------------------------------
+# A1b - tolerance-free sunset successor continuation.
+#
+# Continues a sunset search from the exact Terrestrial Time solver state
+# carried by a validated continuation witness (A1a). The witness records a
+# solver start value; it is NOT physical-event identity, and A1a does not
+# and cannot decide whether that value actually sits on the post-transition
+# side of a crossing. That astronomical question is answered here, before
+# any search is permitted to run.
+#
+# NO TIME-GAP TOLERANCE IS USED OR NEEDED.
+#
+# find_discrete reports only points at which the sampled predicate changes
+# value. The first sample of the successor bracket is the continuation state
+# itself, and it has already been proven sun-down. The crossing that
+# produced it therefore presents no sign change inside the bracket and
+# cannot be rediscovered. Exclusion of the originating root is a structural
+# consequence of the validated post-transition start - not a minimum gap,
+# not an epsilon, not a time-distance identity test.
+#
+# The 3600-second guard in find_next_sunset_after_utc is deliberately NOT
+# reused, NOT extended and NOT removed. It governs /sunset-after, which
+# resumes from an arbitrary caller-supplied instant with no proof of which
+# side of a crossing it lies on, and it remains that route's business.
+#
+# SUCCESSOR_SEARCH_SPAN_DAYS is a search horizon, not an event-identity
+# tolerance. It equals the forward reach already used by
+# find_next_sunset_after_utc, so polar and no-event behavior is preserved
+# rather than changed: an observer with no sunset inside the horizon yields
+# no successor instead of a fabricated one.
+# ---------------------------------------------------------------------------
+
+SUCCESSOR_SEARCH_SPAN_DAYS = 3.0
+
+REASON_CURSOR_STATE_INVALID = "CURSOR_STATE_INVALID"
+REASON_CURSOR_NOT_POST_TRANSITION = "CURSOR_NOT_POST_TRANSITION"
+
+SunsetSuccessor = namedtuple("SunsetSuccessor", ("utc", "tt", "kernel"))
+
+
+class SunsetSuccessorError(ScientificEnvironmentError):
+    """Sunset successor continuation failed closed.
+
+    ``reason`` carries a stable code so a later route can map every
+    rejection onto one HTTP status with a distinguishing detail. No HTTP
+    semantics are decided here.
+    """
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def find_sunset_successor(tt_value: float, latitude: float, longitude: float):
+    """Return the next distinct sunset after an exact continuation state.
+
+    ``tt_value`` is the exact binary64 Terrestrial Time Julian Date of a
+    previously determined sunset, as carried by a validated continuation
+    witness. It is reconstructed with ts.tt_jd and used as the solver start
+    state directly: it is never routed through datetime, ISO text, Unix
+    seconds or milliseconds, so the value searched from is bit-identical to
+    the value supplied.
+
+    The continuation state must be post-transition - the Sun must be down
+    for the bound observer at that exact instant. If it is not, the state
+    does not describe the far side of a sunset, and this function fails
+    closed rather than returning a crossing that would silently answer a
+    different question. Passing that check proves only that the supplied
+    state lies on the sun-down side of the predicate. It is not proof of
+    origin and not proof of physical-event identity.
+
+    Returns a SunsetSuccessor, or None when the observer has no sunset
+    within the search horizon.
+
+    Kernel selection follows the ordinary repository routing rule for the
+    period in which this search is performed. It is deliberately NOT
+    inherited from whatever kernel produced the continuation state: the
+    witness binds no kernel filename, because kernel identity is
+    computation provenance and not continuation compatibility. The same
+    kernel is used for the post-transition check and for the search, so a
+    state near a kernel boundary is validated under the kernel that will
+    actually perform the search.
+
+    Observer coordinate domains are NOT re-validated here; observer
+    binding is owned by the continuation witness.
+    """
+    if isinstance(tt_value, bool) or not isinstance(tt_value, (int, float)):
+        raise SunsetSuccessorError(
+            REASON_CURSOR_STATE_INVALID,
+            "SUNSET CONTINUATION STATE INVALID - tt must be a real number, "
+            "received %s" % type(tt_value).__name__,
+        )
+
+    try:
+        tt = float(tt_value)
+    except OverflowError as error:
+        raise SunsetSuccessorError(
+            REASON_CURSOR_STATE_INVALID,
+            "SUNSET CONTINUATION STATE INVALID - tt is too large to represent "
+            "as a float",
+        ) from error
+
+    if not math.isfinite(tt):
+        raise SunsetSuccessorError(
+            REASON_CURSOR_STATE_INVALID,
+            "SUNSET CONTINUATION STATE INVALID - tt must be finite, "
+            "received %r" % (tt_value,),
+        )
+
+    t_cursor = ts.tt_jd(tt)
+
+    kernel_name = choose_kernel_name(int(t_cursor.utc.year))
+    eph = load_kernel(kernel_name)
+
+    is_sun_up = almanac.sunrise_sunset(eph, wgs84.latlon(latitude, longitude))
+
+    if bool(is_sun_up(t_cursor)):
+        raise SunsetSuccessorError(
+            REASON_CURSOR_NOT_POST_TRANSITION,
+            "SUNSET CONTINUATION STATE NOT POST-TRANSITION - the Sun is up "
+            "for the bound observer at the supplied continuation state, so "
+            "it does not lie on the far side of a sunset; refusing to "
+            "continue",
+        )
+
+    t_horizon = ts.tt_jd(tt + SUCCESSOR_SEARCH_SPAN_DAYS)
+
+    times, events = almanac.find_discrete(t_cursor, t_horizon, is_sun_up)
+
+    for t, sun_is_up in zip(times, events):
+        if not bool(sun_is_up):
+            return SunsetSuccessor(
+                utc=t.utc_datetime(),
+                tt=float(t.tt),
+                kernel=kernel_name,
+            )
+
+    return None
 
 def get_delta_t(year: int) -> dict:
     """
