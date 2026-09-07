@@ -1,6 +1,7 @@
 import math
 import os
 from collections import namedtuple
+from dataclasses import dataclass
 from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from skyfield.api import load, wgs84
@@ -176,6 +177,29 @@ def find_season_events(year: int):
     return results, choose_kernel_name(year)
 
 
+@dataclass(frozen=True)
+class SunsetDetermination:
+    """A sunset determination and the exact state it was found at.
+
+    ``tt`` is float(t.tt) read directly from the Skyfield Time object the
+    solver selected. It is never derived from the UTC datetime, ISO text,
+    Unix seconds or milliseconds, so a continuation witness encoded from
+    it is bit-identical to the state the root was found at.
+
+    The fields are named and this is deliberately not a tuple: no call
+    site can unpack a determination positionally, so a future change to
+    field order cannot silently transpose utc, tt and kernel.
+
+    When no sunset exists inside the search window, ``utc`` and ``tt`` are
+    both None and ``kernel`` still reports the routing decision, preserving
+    the previous (None, kernel) outcome.
+    """
+
+    utc: datetime | None
+    tt: float | None
+    kernel: str
+
+
 def find_sunset_utc(date_utc: datetime, latitude: float, longitude: float):
     """
     HPC-aware local-date sunset finder.
@@ -216,9 +240,17 @@ def find_sunset_utc(date_utc: datetime, latitude: float, longitude: float):
 
     for t, is_sun_up in zip(times, events):
         if not bool(is_sun_up):
-            return t.utc_datetime(), choose_kernel_name(date_utc.year)
+            return SunsetDetermination(
+                utc=t.utc_datetime(),
+                tt=float(t.tt),
+                kernel=choose_kernel_name(date_utc.year),
+            )
 
-    return None, choose_kernel_name(date_utc.year)
+    return SunsetDetermination(
+        utc=None,
+        tt=None,
+        kernel=choose_kernel_name(date_utc.year),
+    )
 
 
 def find_next_sunset_after_utc(after_utc: datetime, latitude: float, longitude: float):
@@ -244,9 +276,17 @@ def find_next_sunset_after_utc(after_utc: datetime, latitude: float, longitude: 
             sunset_dt = t.utc_datetime()
 
             if sunset_dt.timestamp() > after_timestamp + min_gap_seconds:
-                return sunset_dt, choose_kernel_name(after_utc.year)
+                return SunsetDetermination(
+                    utc=sunset_dt,
+                    tt=float(t.tt),
+                    kernel=choose_kernel_name(after_utc.year),
+                )
 
-    return None, choose_kernel_name(after_utc.year)
+    return SunsetDetermination(
+        utc=None,
+        tt=None,
+        kernel=choose_kernel_name(after_utc.year),
+    )
 
 
 # ---------------------------------------------------------------------------

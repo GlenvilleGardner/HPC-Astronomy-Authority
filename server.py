@@ -1,3 +1,5 @@
+import math
+
 from fastapi import FastAPI, HTTPException
 from datetime import datetime, timezone
 
@@ -20,6 +22,12 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     get_default_kernel_name,
     get_delta_t,
 )
+from sunset_cursor import (  # noqa: E402 - deliberate: gate runs first
+    LATITUDE_DOMAIN,
+    LONGITUDE_DOMAIN,
+    SunsetCursorError,
+    encode_sunset_cursor,
+)
 
 app = FastAPI(title="HPC Astronomy Authority")
 
@@ -29,6 +37,69 @@ def parse_utc_datetime(value: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+CURSOR_UNAVAILABLE_OBSERVER = "OBSERVER_OUT_OF_CURSOR_DOMAIN"
+CURSOR_UNAVAILABLE_ENCODING = "CURSOR_ENCODING_FAILED"
+
+
+def observer_is_cursor_representable(latitude: float, longitude: float) -> bool:
+    """Predict whether the cursor encoder can represent this observer.
+
+    The domains are imported from sunset_cursor rather than restated here,
+    so this prediction cannot drift from the encoder it predicts.
+
+    This is a prediction, NOT request validation. No sunset request is
+    accepted or rejected on its result, and the coordinate handling of
+    /sunset and /sunset-after is unchanged.
+    """
+    for value, (low, high) in (
+        (latitude, LATITUDE_DOMAIN),
+        (longitude, LONGITUDE_DOMAIN),
+    ):
+        if not math.isfinite(value) or value < low or value > high:
+            return False
+
+    return True
+
+
+def cursor_fields(tt, latitude: float, longitude: float) -> dict:
+    """Build the additive continuation-witness fields for a sunset response.
+
+    Emission is additive. An observer the cursor encoder cannot represent
+    is reported as an explicit unavailability rather than as an error, and
+    a SunsetCursorError raised while encoding is converted into the same
+    explicit representation: ``cursor`` is null and a reason is returned.
+
+    No claim is made that every possible runtime failure is converted.
+    Only SunsetCursorError is handled here; anything that sunset_cursor
+    does not normalize to it propagates unchanged.
+
+    This governs response emission only. It is not coordinate validation:
+    no request is accepted or rejected here, and the sunset fields of a
+    successful determination remain the governing response content.
+
+    ``cursorUnavailableReason`` is present only when ``cursor`` is null.
+    """
+    if not observer_is_cursor_representable(latitude, longitude):
+        return {
+            "cursor": None,
+            "cursorUnavailableReason": CURSOR_UNAVAILABLE_OBSERVER,
+        }
+
+    try:
+        cursor = encode_sunset_cursor(
+            tt=tt,
+            latitude=latitude,
+            longitude=longitude,
+        )
+    except SunsetCursorError:
+        return {
+            "cursor": None,
+            "cursorUnavailableReason": CURSOR_UNAVAILABLE_ENCODING,
+        }
+
+    return {"cursor": cursor}
 
 
 @app.get("/health")
@@ -187,17 +258,18 @@ def subsolar(date: str):
 def sunset(date: str, latitude: float, longitude: float):
     dt = parse_utc_datetime(date)
 
-    sunset_dt, kernel = find_sunset_utc(dt, latitude, longitude)
+    determination = find_sunset_utc(dt, latitude, longitude)
 
-    if sunset_dt is None:
+    if determination.utc is None:
         raise HTTPException(status_code=404, detail="Sunset not found")
 
     return {
         "date": date,
         "latitude": latitude,
         "longitude": longitude,
-        "kernel": kernel,
-        "sunsetUTC": sunset_dt.isoformat(),
+        "kernel": determination.kernel,
+        "sunsetUTC": determination.utc.isoformat(),
+        **cursor_fields(determination.tt, latitude, longitude),
     }
 
 
@@ -205,19 +277,20 @@ def sunset(date: str, latitude: float, longitude: float):
 def sunset_after(afterUTC: str, latitude: float, longitude: float):
     after_dt = parse_utc_datetime(afterUTC)
 
-    sunset_dt, kernel = find_next_sunset_after_utc(
+    determination = find_next_sunset_after_utc(
         after_dt,
         latitude,
         longitude,
     )
 
-    if sunset_dt is None:
+    if determination.utc is None:
         raise HTTPException(status_code=404, detail="Next sunset not found")
 
     return {
         "afterUTC": afterUTC,
         "latitude": latitude,
         "longitude": longitude,
-        "kernel": kernel,
-        "sunsetUTC": sunset_dt.isoformat(),
+        "kernel": determination.kernel,
+        "sunsetUTC": determination.utc.isoformat(),
+        **cursor_fields(determination.tt, latitude, longitude),
     }

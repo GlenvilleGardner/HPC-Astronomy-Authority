@@ -251,13 +251,13 @@ class TestSuccessorFromExactState(unittest.TestCase):
     def test_no_same_root_rediscovery(self):
         # The originating root is the sunset that closes 2027-03-20 for
         # this observer, produced by the existing solver.
-        origin_utc, _kernel = find_sunset_utc(
+        origin = find_sunset_utc(
             datetime(2027, 3, 20, tzinfo=timezone.utc),
             REFERENCE_LATITUDE,
             REFERENCE_LONGITUDE,
         )
-        self.assertEqual(origin_utc.isoformat(), CURSOR_SUNSET_UTC)
-        self.assertNotEqual(self.successor.utc, origin_utc)
+        self.assertEqual(origin.utc.isoformat(), CURSOR_SUNSET_UTC)
+        self.assertNotEqual(self.successor.utc, origin.utc)
 
         # An independent search over the same bracket never reports the
         # continuation state itself as a crossing: starting from a proven
@@ -372,34 +372,34 @@ class TestSunsetAfterGoldenPreserved(unittest.TestCase):
         self.assertIn("after_timestamp + min_gap_seconds", source)
 
     def test_sunset_after_from_cursor_instant(self):
-        sunset_dt, kernel = find_next_sunset_after_utc(
+        determination = find_next_sunset_after_utc(
             datetime(2027, 3, 20, 23, 7, 45, 858897, tzinfo=timezone.utc),
             REFERENCE_LATITUDE,
             REFERENCE_LONGITUDE,
         )
 
-        self.assertEqual(sunset_dt.isoformat(), SUCCESSOR_SUNSET_UTC)
-        self.assertEqual(kernel, REFERENCE_KERNEL)
+        self.assertEqual(determination.utc.isoformat(), SUCCESSOR_SUNSET_UTC)
+        self.assertEqual(determination.kernel, REFERENCE_KERNEL)
 
     def test_sunset_after_from_midday(self):
-        sunset_dt, kernel = find_next_sunset_after_utc(
+        determination = find_next_sunset_after_utc(
             datetime(2027, 3, 20, 12, 0, 0, tzinfo=timezone.utc),
             REFERENCE_LATITUDE,
             REFERENCE_LONGITUDE,
         )
 
-        self.assertEqual(sunset_dt.isoformat(), CURSOR_SUNSET_UTC)
-        self.assertEqual(kernel, REFERENCE_KERNEL)
+        self.assertEqual(determination.utc.isoformat(), CURSOR_SUNSET_UTC)
+        self.assertEqual(determination.kernel, REFERENCE_KERNEL)
 
     def test_sunset_golden_unchanged(self):
-        sunset_dt, kernel = find_sunset_utc(
+        determination = find_sunset_utc(
             datetime(2027, 3, 20, tzinfo=timezone.utc),
             REFERENCE_LATITUDE,
             REFERENCE_LONGITUDE,
         )
 
-        self.assertEqual(sunset_dt.isoformat(), CURSOR_SUNSET_UTC)
-        self.assertEqual(kernel, REFERENCE_KERNEL)
+        self.assertEqual(determination.utc.isoformat(), CURSOR_SUNSET_UTC)
+        self.assertEqual(determination.kernel, REFERENCE_KERNEL)
 
 
 # --- 6. Polar absence ------------------------------------------------------
