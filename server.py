@@ -13,12 +13,14 @@ from runtime_enforcement import verify_runtime_scientific_components
 verify_runtime_scientific_components()
 
 from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
+    SunsetSuccessorError,
     solar_longitude,
     subsolar_point,
     find_equinox,
     find_season_events,
     find_sunset_utc,
     find_next_sunset_after_utc,
+    find_sunset_successor,
     get_default_kernel_name,
     get_delta_t,
 )
@@ -26,6 +28,7 @@ from sunset_cursor import (  # noqa: E402 - deliberate: gate runs first
     LATITUDE_DOMAIN,
     LONGITUDE_DOMAIN,
     SunsetCursorError,
+    decode_sunset_cursor,
     encode_sunset_cursor,
 )
 
@@ -293,4 +296,72 @@ def sunset_after(afterUTC: str, latitude: float, longitude: float):
         "kernel": determination.kernel,
         "sunsetUTC": determination.utc.isoformat(),
         **cursor_fields(determination.tt, latitude, longitude),
+    }
+
+
+@app.get("/sunset-successor")
+def sunset_successor(cursor: str, latitude: float, longitude: float):
+    """Continue a sunset sequence from a validated continuation witness.
+
+    Additive. /sunset and /sunset-after are unchanged: no existing field
+    is renamed, removed or reinterpreted, and no existing status behavior
+    is altered.
+
+    The witness is decoded and validated by A1a, and the exact binary64
+    Terrestrial Time state it carries is handed to the A1b solver
+    directly. No astronomy is performed here, and the continuation state
+    is never routed through a datetime, an ISO string or a Unix value.
+
+    The observer that governs the search is the one the witness is bound
+    to. The request coordinates are supplied to the decoder so that a
+    cursor presented for a different observer fails closed rather than
+    silently answering a different question.
+
+    Every A1a and A1b fail-closed rejection is reported as HTTP 400 with
+    its stable reason code in the detail. A checksum mismatch is NOT an
+    authentication or authorization outcome - the checksum detects
+    accidental corruption only - so 401 and 403 are deliberately unused.
+
+    HTTP 404 reports that the bound observer has no sunset inside the
+    certified successor horizon. That is an astronomical absence, not a
+    rejected request.
+
+    The legacy one-hour guard in find_next_sunset_after_utc governs
+    /sunset-after and remains that route's business. It is not reused,
+    not extended and not removed here, and this route introduces no gap,
+    epsilon or event-identity tolerance of its own.
+    """
+    try:
+        decoded = decode_sunset_cursor(
+            cursor,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        successor = find_sunset_successor(
+            decoded.tt,
+            decoded.latitude,
+            decoded.longitude,
+        )
+    except (SunsetCursorError, SunsetSuccessorError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail="%s: %s" % (error.reason, error),
+        )
+
+    if successor is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Sunset successor not found",
+        )
+
+    return {
+        "latitude": decoded.latitude,
+        "longitude": decoded.longitude,
+        "kernel": successor.kernel,
+        "sunsetUTC": successor.utc.isoformat(),
+        **cursor_fields(
+            successor.tt,
+            decoded.latitude,
+            decoded.longitude,
+        ),
     }
