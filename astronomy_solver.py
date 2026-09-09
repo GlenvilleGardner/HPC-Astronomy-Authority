@@ -704,3 +704,106 @@ def kernel_coverage_tt(kernel_name: str) -> KernelCoverage:
         tt_start=tt_start,
         tt_end=tt_end,
     )
+
+
+# ---------------------------------------------------------------------------
+# A2-2 - data-authoritative kernel selection.
+#
+# Answers one question: which pinned NASA/JPL artifact has governed
+# precedence for a given exact TT state or interval under its actual
+# certified BSP coverage? The answer comes from actual
+# certified BSP coverage under a fixed governed precedence, and from
+# nothing else. No civil year, no Gregorian date, no UTC year, no timezone
+# and no nominal duration participates.
+#
+# SCOPE OF THE CLAIM
+#
+# The selector determines precedence among pinned authoritative NASA/JPL
+# artifacts according to declared certified coverage. It does not certify
+# that every later computation is evaluable throughout that interval.
+#
+# Declared coverage and computation-specific evaluability are different
+# statements. A computation that resolves light time reads the ephemeris
+# before the instant it is asked about, so a state at an artifact's exact
+# lower bound is declared-covered yet cannot serve such a computation.
+# That reach is a property of the computation, not of the data. It is
+# deliberately not modelled here, and no margin, lookback or slack of any
+# size is applied. Handling it belongs to the solver.
+#
+# In the opposite direction the certified stack may evaluate beyond a
+# segment's declared end without raising. The containment test below is
+# therefore the binding upper guard, and an ephemeris range error must
+# never be relied upon to supply one.
+# ---------------------------------------------------------------------------
+
+# Fixed, order-sensitive scientific precedence.
+#
+# DE440 is preferred wherever its actual authoritative BSP coverage
+# contains the required TT state or interval; DE441 supplies extended and
+# deep-time declared coverage outside DE440.
+#
+# JPL states inside the kernels themselves that DE441 is less accurate
+# than DE440 for the current century, so this ordering is the product
+# architecture rather than an HPC convention.
+PINNED_KERNEL_PRECEDENCE = (PRIMARY_KERNEL, ANCIENT_KERNEL, FUTURE_KERNEL)
+
+
+def select_kernel_containing_instant(tt):
+    """Return the selected pinned NASA/JPL artifact whose coverage contains ``tt``.
+
+    Selection evaluates the fixed governed precedence and returns the
+    first pinned artifact whose certified coverage contains the state.
+    Containment is closed and inclusive, compared exactly against the
+    certified bounds. No bound is widened or narrowed.
+
+    This reports declared certified coverage. It does not certify that a
+    later computation is evaluable at the instant.
+
+    Returns None when no pinned artifact covers the instant. That is a
+    coverage-query result, not a request failure: nothing is fabricated,
+    and None cannot be mistaken for an artifact name.
+    """
+    instant = _exact_finite_tt(tt, "instant tt")
+
+    for kernel_name in PINNED_KERNEL_PRECEDENCE:
+        coverage = kernel_coverage_tt(kernel_name)
+        if coverage.tt_start <= instant <= coverage.tt_end:
+            return kernel_name
+
+    return None
+
+
+def select_kernel_for_interval(tt_lo, tt_hi):
+    """Return the selected pinned NASA/JPL artifact containing the whole interval.
+
+    Selection evaluates the same fixed governed precedence. The entire
+    closed interval must lie inside one artifact's certified coverage: a
+    state covered only by stitching two artifacts together is not returned
+    here, because no single pinned artifact declares coverage for the
+    whole interval.
+
+    A zero-width interval is accepted and agrees with
+    select_kernel_containing_instant. A reversed interval is malformed
+    input and fails closed; it is not reported as absent coverage.
+
+    This reports declared certified coverage. It does not certify that a
+    later computation is evaluable throughout the interval.
+
+    Returns None when no pinned artifact contains the whole interval.
+    """
+    lo = _exact_finite_tt(tt_lo, "interval start tt")
+    hi = _exact_finite_tt(tt_hi, "interval end tt")
+
+    if lo > hi:
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SUNSET CHRONOLOGY INTERVAL INVALID - the interval start must "
+            "not follow the interval end, received TT %r .. %r" % (lo, hi),
+        )
+
+    for kernel_name in PINNED_KERNEL_PRECEDENCE:
+        coverage = kernel_coverage_tt(kernel_name)
+        if coverage.tt_start <= lo and hi <= coverage.tt_end:
+            return kernel_name
+
+    return None
