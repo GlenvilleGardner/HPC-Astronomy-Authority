@@ -468,3 +468,239 @@ def get_delta_t(year: int) -> dict:
             "For ancient dates, Delta T can affect precise UTC event timing."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# A2-1 - certified kernel coverage substrate.
+#
+# WHAT THIS OPERATION ADDS
+#
+# The ability to ask a pinned NASA/JPL artifact what it actually contains,
+# read from that artifact's own segment metadata. Nothing else. No kernel is
+# selected here, no interval is solved, no event is determined and no route
+# is served; each of those is a separate governed operation.
+#
+# SCIENTIFIC AUTHORITY
+#
+# The kernel content is the authority on where a genuine topocentric solar
+# event is actually supported. kernel_coverage_tt reads that support from
+# the published segment descriptors through the existing certified
+# load_kernel path. No declared value, no manifest entry, no configuration
+# setting and no civil-year constant contributes to it.
+#
+# choose_kernel_name and the civil-year constants it is built on are frozen
+# legacy compatibility routing: they state which file existing code opens.
+# Nothing in this block reads them, and nothing here modifies them or any
+# existing route.
+#
+# TIME SCALES
+#
+# BSP segment metadata is published in JD(TDB). KernelCoverage preserves the
+# raw TDB bounds unaltered for provenance and carries the TT bounds that the
+# certified timescale derives from them, because solver intervals are
+# expressed in TT. No bound is widened or narrowed to absorb the difference
+# between the two scales, and a raw TDB bound is never compared against a TT
+# interval.
+# ---------------------------------------------------------------------------
+
+REASON_INSTANT_STATE_INVALID = "INSTANT_STATE_INVALID"
+REASON_KERNEL_SEGMENTS_UNAVAILABLE = "KERNEL_SEGMENTS_UNAVAILABLE"
+
+# The exact vector chain a topocentric sunset consumes:
+#
+#     (0, 3)     solar system barycentre -> Earth-Moon barycentre
+#     (3, 399)   Earth-Moon barycentre   -> Earth
+#     (0, 10)    solar system barycentre -> Sun
+#
+# eph["earth"] resolves through the first two and eph["sun"] through the
+# third. A kernel that does not publish all three cannot answer the
+# question at all, whatever else it contains.
+REQUIRED_SOLAR_SEGMENT_PAIRS = ((0, 3), (3, 399), (0, 10))
+
+
+class SunsetChronologyError(ScientificEnvironmentError):
+    """Sunset chronology failed closed.
+
+    ``reason`` carries a stable code so a later route can map every
+    rejection onto one HTTP status with a distinguishing detail. No HTTP
+    semantics are decided here.
+    """
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class KernelCoverage:
+    """What one pinned NASA/JPL kernel actually contains.
+
+    ``tdb_start`` and ``tdb_end`` are the published segment bounds exactly
+    as the BSP records them, in JD(TDB), preserved for provenance.
+    ``tt_start`` and ``tt_end`` are those same two instants expressed in
+    Terrestrial Time by the certified timescale, which is the scale solver
+    intervals are compared in. Neither pair is rounded or adjusted.
+
+    The bounds are the intersection across REQUIRED_SOLAR_SEGMENT_PAIRS,
+    computed rather than assumed, so they describe the interval over which
+    a topocentric sunset is actually supported - not the widest interval
+    any one segment happens to reach.
+
+    Named fields, deliberately not a tuple: no call site can unpack a
+    coverage record positionally, so a later change to field order cannot
+    silently transpose the TDB and TT bounds.
+    """
+
+    kernel: str
+    tdb_start: float
+    tdb_end: float
+    tt_start: float
+    tt_end: float
+
+
+def _exact_finite_tt(value, field):
+    """Accept only an exact, finite, real Terrestrial Time value.
+
+    Introduced here as approved A2-1 substrate. It has no caller in this
+    operation; it is first consumed by the later governed operations that
+    accept an anchor instant.
+
+    bool is rejected before the numeric check because it is a subclass of
+    int and would otherwise be silently accepted as 0.0 or 1.0.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SUNSET CHRONOLOGY STATE INVALID - %s must be a real number, "
+            "received %s" % (field, type(value).__name__),
+        )
+
+    try:
+        number = float(value)
+    except OverflowError as error:
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SUNSET CHRONOLOGY STATE INVALID - %s is too large to represent "
+            "as a float" % field,
+        ) from error
+
+    if not math.isfinite(number):
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SUNSET CHRONOLOGY STATE INVALID - %s must be finite, received %r"
+            % (field, value),
+        )
+
+    return number
+
+
+@lru_cache(maxsize=8)
+def kernel_coverage_tt(kernel_name: str) -> KernelCoverage:
+    """Return what ``kernel_name`` actually covers, read from the BSP itself.
+
+    The kernel is opened through the existing certified load_kernel path;
+    no file is parsed independently and no coverage is taken from
+    configuration, from a manifest or from any declared value. Only the
+    segment metadata published inside the artifact is consulted.
+
+    The TT bounds come from each segment's own time_range against the
+    shared certified timescale, so the TDB-to-TT conversion is performed by
+    the certified machinery rather than by arithmetic here.
+
+    Cached because the answer is a property of an immutable pinned
+    artifact. A failure is not cached: lru_cache stores return values only,
+    so a kernel missing a required segment is re-diagnosed on every call.
+
+    SINGLE-SEGMENT INVARIANT
+
+    Each required pair must be represented by exactly one segment, and
+    that is enforced rather than assumed. Every certified kernel currently
+    publishes 14 segments carrying 14 distinct center/target pairs, so no
+    pair is duplicated and the invariant holds with margin.
+
+    It is enforced because the certified machinery, not this reader,
+    decides which segment applies when several share a pair: jplephem's
+    SPK.__getitem__ returns the last matching segment, while Skyfield
+    composes a Stack across the matches and selects per epoch. A duplicate
+    would therefore make applicable coverage a question this bounds reader
+    cannot answer as a single interval without reimplementing certified
+    selection logic. It fails closed instead of guessing.
+    """
+    eph = load_kernel(kernel_name)
+
+    tdb_start = None
+    tdb_end = None
+    tt_start = None
+    tt_end = None
+    missing = []
+    ambiguous = []
+
+    for pair in REQUIRED_SOLAR_SEGMENT_PAIRS:
+        matches = [
+            candidate
+            for candidate in eph.segments
+            if (candidate.center, candidate.target) == pair
+        ]
+
+        if not matches:
+            missing.append(pair)
+            continue
+
+        if len(matches) > 1:
+            ambiguous.append((pair, len(matches)))
+            continue
+
+        segment = matches[0]
+
+        spk_segment = segment.spk_segment
+        t_start, t_end = segment.time_range(ts)
+
+        segment_tdb_start = float(spk_segment.start_jd)
+        segment_tdb_end = float(spk_segment.end_jd)
+        segment_tt_start = float(t_start.tt)
+        segment_tt_end = float(t_end.tt)
+
+        if tdb_start is None:
+            tdb_start = segment_tdb_start
+            tdb_end = segment_tdb_end
+            tt_start = segment_tt_start
+            tt_end = segment_tt_end
+        else:
+            tdb_start = max(tdb_start, segment_tdb_start)
+            tdb_end = min(tdb_end, segment_tdb_end)
+            tt_start = max(tt_start, segment_tt_start)
+            tt_end = min(tt_end, segment_tt_end)
+
+    if missing:
+        raise SunsetChronologyError(
+            REASON_KERNEL_SEGMENTS_UNAVAILABLE,
+            "KERNEL SEGMENTS UNAVAILABLE - %s does not publish every solar "
+            "segment a topocentric sunset requires; missing %s. No sunset "
+            "can be determined from this kernel." % (kernel_name, list(missing)),
+        )
+
+    if ambiguous:
+        raise SunsetChronologyError(
+            REASON_KERNEL_SEGMENTS_UNAVAILABLE,
+            "KERNEL SEGMENTS UNAVAILABLE - %s represents a required solar "
+            "segment more than once %s. Which segment applies is decided by "
+            "the certified ephemeris machinery per epoch, not by a single "
+            "coverage interval, so this reader refuses to report bounds "
+            "rather than guess." % (kernel_name, sorted(ambiguous)),
+        )
+
+    if not tt_start < tt_end:
+        raise SunsetChronologyError(
+            REASON_KERNEL_SEGMENTS_UNAVAILABLE,
+            "KERNEL SEGMENTS UNAVAILABLE - the required solar segments of %s "
+            "do not share a non-empty interval; intersection TT %r .. %r"
+            % (kernel_name, tt_start, tt_end),
+        )
+
+    return KernelCoverage(
+        kernel=kernel_name,
+        tdb_start=tdb_start,
+        tdb_end=tdb_end,
+        tt_start=tt_start,
+        tt_end=tt_end,
+    )
