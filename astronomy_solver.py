@@ -996,14 +996,19 @@ def _governed_observer(value, field, domain):
     return number
 
 
-def _observation_is_evaluable(is_sun_up, tt):
+def _observation_is_evaluable(state_probe, tt):
     """Report whether the certified computation actually completes at ``tt``.
 
-    The question is answered by performing the real topocentric solar
-    computation, not by predicting it. Only an ephemeris range error is
-    treated as an answer: it is the certified machinery reporting that a
-    required record lies outside the published coefficients, which is
-    conclusive proof that the observation cannot be formed.
+    ``state_probe`` is the certified computation itself, as a callable of a
+    Time that raises an ephemeris range error exactly where it cannot be
+    formed. Which computation that is belongs to the caller: this helper
+    reports evaluability and asserts nothing about what is being evaluated.
+
+    The question is answered by performing that real computation, not by
+    predicting it. Only an ephemeris range error is treated as an answer: it
+    is the certified machinery reporting that a required record lies outside
+    the published coefficients, which is conclusive proof that the
+    observation cannot be formed.
 
     Nothing else is caught. Any other failure is not a statement about
     ephemeris support and must propagate rather than be recorded here as
@@ -1016,15 +1021,22 @@ def _observation_is_evaluable(is_sun_up, tt):
     raising above a declared bound proves nothing.
     """
     try:
-        is_sun_up(ts.tt_jd(tt))
+        state_probe(ts.tt_jd(tt))
     except EphemerisRangeError:
         return False
 
     return True
 
 
-def _first_evaluable_state(is_sun_up, unevaluable_tt, evaluable_tt):
+def _first_evaluable_state(state_probe, unevaluable_tt, evaluable_tt):
     """Return the exact earliest TT state at which the computation completes.
+
+    ``state_probe`` is the certified computation whose reach is being
+    located, as a callable of a Time that raises an ephemeris range error
+    exactly where it cannot be formed. The boundary this returns belongs to
+    that computation and to no other: two computations that read the
+    ephemeris differently have different reaches, and one may not be used to
+    certify the other.
 
     PRECONDITION, required of every caller:
 
@@ -1034,8 +1046,8 @@ def _first_evaluable_state(is_sun_up, unevaluable_tt, evaluable_tt):
     to fail at, and ``evaluable_tt`` a later state it was ACTUALLY OBSERVED
     to complete at. Neither is assumed, predicted or modelled. Calling this
     with the temporal or evaluability roles reversed asks a question the
-    evidence does not support and is not permitted; the single call site
-    below establishes both roles by observation immediately beforehand.
+    evidence does not support and is not permitted; each call site
+    establishes both roles by observation immediately beforehand.
 
     The transition is located by interrogating the actual computation,
     halving the interval until no representable binary64 value lies strictly
@@ -1065,7 +1077,7 @@ def _first_evaluable_state(is_sun_up, unevaluable_tt, evaluable_tt):
         if mid == bad or mid == good:
             return good
 
-        if _observation_is_evaluable(is_sun_up, mid):
+        if _observation_is_evaluable(state_probe, mid):
             good = mid
         else:
             bad = mid
