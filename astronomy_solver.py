@@ -1609,3 +1609,137 @@ def find_sunset_from_instant(tt, latitude, longitude):
         "absence of a sunset is not established"
         % (anchor, frontier.tt_lo, frontier.tt_hi),
     )
+
+
+# ---------------------------------------------------------------------------
+# A2-4 - atomic sunset bracket.
+#
+# WHAT THIS OPERATION ADDS
+#
+# One composed astronomical answer: the pair of genuine observer-local
+# sunset boundaries that surround an arbitrary exact Terrestrial Time
+# state.
+#
+#     previous sunset  <  anchor  <  next sunset
+#
+# It performs no astronomy. Both boundaries come from the published strict
+# directional solvers, which own every scientific decision between them -
+# observer validation, declared certified coverage, computation
+# evaluability, governed precedence, anchor immobility, contiguity of the
+# examined territory, and the exact binary64 ordering that makes each side
+# strict. Nothing here re-solves, re-checks or second-guesses any of it,
+# and no third astronomical solution exists in this block.
+#
+# STILL ASTRONOMY, NOT CALENDAR
+#
+# This identifies the local astronomical sunset boundaries surrounding an
+# instant. It decides no weekday, no ordinal, no month or day ownership, no
+# annual grid, no year and no feast date. Those are separate questions for
+# a later governed layer, and none of them is implied here.
+#
+# ONE ANCHOR, ONE OBSERVER, TWO PROVENANCES
+#
+# The anchor is validated once and the resulting exact value is handed to
+# both directions, so the two sides are answered for a bit-identical state
+# rather than for two states that merely look alike. The same observer is
+# passed to both.
+#
+# The two sides are NOT required to share an artifact. Each direction
+# selects from actual certified coverage and evaluability independently, so
+# an anchor lying within a directional reach of a coverage boundary
+# legitimately yields one boundary from one pinned NASA/JPL artifact and
+# the other from another. Each event keeps its own provenance and the
+# bracket asserts no single-artifact ownership of the interval between
+# them.
+#
+# ABSENCE IS NOT FAILURE, AND FAILURE IS NOT ABSENCE
+#
+# Both directions are computed unconditionally, before any conclusion is
+# drawn. A governed failure from either side propagates unchanged: if a
+# direction could not be completed then this composed question was not
+# completed either, and saying so is the honest answer.
+#
+# None is returned only when BOTH directions completed scientifically and
+# at least one of them established that no sunset exists inside its fully
+# supported horizon. At high latitude that is the ordinary, correct answer
+# rather than an error: an instant inside a polar day or polar night is not
+# bounded by sunsets within the certified directional horizon, so no
+# bracket exists to report. A failure is never converted into that claim.
+#
+# EXACT-ROOT ANCHORS
+#
+# An anchor that is itself a determined sunset root is not special-cased.
+# The published directional contracts exclude a crossing exactly equal to
+# the anchor from both directions, so such an anchor is bracketed by the
+# surrounding pair. That is the definition working, not an edge case to
+# repair, and introducing an event-identity rule to change it is precisely
+# what is forbidden.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SunsetBracket:
+    """The two genuine sunset boundaries surrounding an exact TT state.
+
+    ``anchor`` is the exact binary64 Terrestrial Time state the bracket was
+    established for, carried through unaltered - never via a datetime, ISO
+    text, Unix seconds or milliseconds. It is part of the record because it
+    makes the claim self-contained and checkable: previous.tt < anchor <
+    next.tt can be verified from the record alone, and a bracket cannot be
+    silently reused for an instant it does not contain.
+
+    ``previous`` and ``next`` each carry their own artifact provenance.
+    They may name different pinned NASA/JPL artifacts when the anchor lies
+    near a coverage boundary, and that is correct rather than a defect: no
+    bracket-level kernel is recorded, because no single artifact owns the
+    interval in that case.
+
+    The observer is deliberately absent. Binding an observer into a
+    transportable record is the continuation witness's responsibility, not
+    this one's.
+
+    Named fields, deliberately not a tuple: no call site can unpack a
+    bracket positionally, so a later change to field order cannot silently
+    transpose the two boundaries or the state they surround.
+    """
+
+    anchor: float
+    previous: SunsetEvent
+    next: SunsetEvent
+
+
+def find_sunset_bracket(tt, latitude, longitude):
+    """Return the sunset boundaries surrounding an arbitrary exact anchor.
+
+    ``tt`` is an exact binary64 Terrestrial Time state. It is arbitrary: it
+    need not be a sunset and need not lie on any particular side of one.
+
+    Returns a SunsetBracket, or None when both directions completed
+    scientifically and at least one of them found no sunset inside its
+    fully supported horizon - the genuine polar outcome, where an instant
+    is simply not bounded by sunsets within the certified directional
+    horizon.
+
+    Fails closed by propagating the directional solvers' own stable
+    reasons, unchanged, when the anchor state is malformed, the observer
+    lies outside the governed geodetic domain, or authoritative coverage or
+    computational reach ran out before a boundary could be established. No
+    governed failure is caught or reinterpreted here, and none is ever
+    converted into an absence.
+
+    No HTTP semantics are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+
+    # Both directions are computed before anything is concluded. A failure
+    # on either side propagates from here unchanged, so an incomplete
+    # direction can never be reported as an absence of sunset.
+    previous = find_sunset_predecessor(anchor, latitude, longitude)
+    next_sunset = find_sunset_from_instant(anchor, latitude, longitude)
+
+    if previous is None or next_sunset is None:
+        return None
+
+    return SunsetBracket(
+        anchor=anchor, previous=previous, next=next_sunset
+    )
