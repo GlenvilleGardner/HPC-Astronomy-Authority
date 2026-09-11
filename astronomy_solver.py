@@ -1834,3 +1834,337 @@ class AstronomicalEvent:
     tt: float
     kind: str
     kernel: str
+
+
+# ---------------------------------------------------------------------------
+# A3b-i - geocentric supported search frontier.
+#
+# WHAT THIS OPERATION ADDS
+#
+# The ability to ask, for one directional interval, which pinned NASA/JPL
+# artifact can actually support the geocentric solar-longitude computation
+# and over exactly what contiguous interval. Nothing else. No crossing is
+# solved, no event kind is accepted, no horizon is defined and no route is
+# served; each of those is a separate governed operation.
+#
+# WHY THIS CANNOT BORROW THE SUNSET FRONTIER
+#
+# The topocentric sunset computation and the geocentric solar-longitude
+# computation do not have interchangeable scientific support, and that was
+# measured rather than assumed. Each artifact's first evaluable state
+# differs between the two computations by a few milliseconds, and the
+# direction of the difference is not constant: under DE440 the geocentric
+# boundary is the lower of the two, while under both DE441 parts it is the
+# higher. A frontier admitted for the sunset computation can therefore
+# contain states at which this computation raises, and the reverse is also
+# possible. Support certified for one is not support for the other.
+#
+# So the sunset frontier is neither reused, wrapped nor called here, and no
+# observer is invented in order to borrow it. The observer is not merely
+# unnecessary for this question - it is absent from it. What IS shared is
+# the observer-free coverage and precedence substrate, which answers the
+# same declared-data question for both.
+#
+# TWO QUESTIONS, KEPT SEPARATE
+#
+# Declared coverage and computation-specific evaluability remain distinct.
+# Neither is sufficient alone. A state at an artifact's declared start is
+# declared-covered yet cannot be computed there, because this computation
+# resolves light time and reads the Sun before the instant it is asked
+# about. And the certified stack has been observed to return evaluations
+# beyond declared coverage rather than refusing them, so a successful
+# computation can never substitute for explicit declared containment.
+# Support is the conjunction of both, and nothing here relies on either
+# half by itself.
+#
+# NO MARGIN IS ENCODED
+#
+# The lower reach is a physical quantity that varies with the Earth-Sun
+# distance and differs between artifacts. No fixed lookback, slack or
+# second-count of any size appears in this block; the reach is established
+# by performing the actual computation, and where it must be located
+# exactly it is located by the neutral binary64 boundary search rather than
+# estimated.
+#
+# CONTIGUITY
+#
+# Exactly one interval is returned, anchored at the caller's anchor state
+# and examined by exactly one artifact. There is no second interval, no
+# resumption and no stitching, so no unsupported temporal gap can be
+# crossed or skipped. The anchor is never moved; only the far side may
+# shorten.
+#
+# A SHORTENED FRONTIER IS NOT AN OUTCOME
+#
+# When authoritative or evaluable territory ends before the requested
+# horizon, the frontier is returned SHORT rather than refused, carrying
+# complete=False and the reason its territory ran out. Whether that is a
+# complete answer or an exhaustion report is not decided here; that belongs
+# to the solver that consumes it.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GeocentricSearchFrontier:
+    """The interval one geocentric solar-longitude search may run over.
+
+    ``kernel`` is the pinned NASA/JPL artifact that both declares the
+    interval and was observed to evaluate the geocentric solar-longitude
+    computation at its endpoints.
+
+    ``tt_lo`` and ``tt_hi`` are the frontier in ascending Terrestrial Time,
+    ready to bound a search directly. Ascending order is a property of the
+    record, not a statement about direction: which endpoint is the anchor is
+    known to the caller that supplied it, and the anchor is never moved.
+
+    ``complete`` is True only when the frontier is the entire requested
+    horizon. False means authoritative or evaluable territory ended first
+    and the frontier was shortened to where it genuinely ends.
+
+    ``truncation_reason`` is None when ``complete`` is True, and otherwise
+    carries the stable code describing why the territory ran out.
+
+    This is deliberately NOT the sunset frontier record, and the two are not
+    interchangeable. They certify different computations whose measured
+    reaches differ, so a value of one type must never be accepted where the
+    other is required. Keeping them distinct makes that structural rather
+    than a matter of documentation.
+
+    Named fields, deliberately not a tuple: no call site can unpack a
+    frontier positionally, so a later change to field order cannot silently
+    transpose the bounds or invert the completeness flag.
+    """
+
+    kernel: str
+    tt_lo: float
+    tt_hi: float
+    complete: bool
+    truncation_reason: str | None
+
+
+def _admit_geocentric_bracket(tt_lo, tt_hi):
+    """Return the artifact that declares and can compute the whole bracket.
+
+    The governed precedence is evaluated in order and BOTH conditions are
+    required of each candidate. An artifact that declares the bracket but
+    cannot evaluate this computation at its endpoints does not end the scan:
+    the search continues to the next artifact, which may be able to.
+
+    The declared containment test is exact, closed and inclusive, and
+    matches select_kernel_for_interval. It is restated rather than reused
+    because that function returns only the FIRST declaring artifact and
+    offers no way to continue past one, which is precisely what this scan
+    must do.
+
+    Evaluability is decided by invoking the real geocentric computation
+    through the neutral probe, so what is certified here is the same
+    callable a later search will actually run. No observer participates,
+    because none appears in the computation.
+
+    WHY TWO ENDPOINT PROBES CERTIFY THE WHOLE BRACKET
+
+    Under the certified runtime and pinned artifact set, every ephemeris
+    read this computation makes at an observation state falls between that
+    state's own instant and that instant less the one-way solar light time;
+    the deflection reads are bounded to the same depth and go no deeper.
+    Both ends of that read window advance with the observation state,
+    because the light time changes by a fraction of a second per day while
+    the state advances by a day per day. The deepest read over an interval
+    is therefore made at its lower endpoint and the shallowest at its upper
+    endpoint, so an interval whose endpoints both evaluate has no interior
+    state that reads outside what those two already proved.
+
+    This is a property of the certified computational environment, not a
+    timeless one. A different runtime or artifact set could read
+    differently, so it is verified rather than assumed.
+
+    Returns None when no pinned artifact supports the whole bracket. That is
+    a support-query result, not a request failure: nothing is fabricated,
+    and None cannot be mistaken for an artifact name.
+    """
+    for kernel_name in PINNED_KERNEL_PRECEDENCE:
+        coverage = kernel_coverage_tt(kernel_name)
+
+        if not (coverage.tt_start <= tt_lo and tt_hi <= coverage.tt_end):
+            continue
+
+        season_at = almanac.seasons(load_kernel(kernel_name))
+
+        if (_observation_is_evaluable(season_at, tt_lo)
+                and _observation_is_evaluable(season_at, tt_hi)):
+            return kernel_name
+
+    return None
+
+
+def geocentric_search_frontier(anchor_tt, horizon_tt):
+    """Return the frontier a geocentric solar-longitude search may run over.
+
+    ``anchor_tt`` is the exact binary64 Terrestrial Time state the search
+    starts from and is never moved: the returned frontier always touches it,
+    so examined territory is contiguous from the anchor. ``horizon_tt`` is
+    the exact TT state the search would like to reach. Direction is derived
+    from their order rather than declared, so a backward frontier cannot be
+    requested with the endpoints transposed. Both are exact TT states; no
+    civil year, Gregorian date, timezone or nominal duration participates,
+    and no horizon is assumed - the caller supplies it.
+
+    An anchor equal to its horizon has no direction and fails closed as
+    malformed interval state.
+
+    Two outcomes are returned rather than raised:
+
+        complete=True   the entire requested horizon is declared by one
+                        artifact and this computation evaluates across it
+        complete=False  authoritative or evaluable territory ended first;
+                        the frontier reaches where it genuinely ends and
+                        carries the reason
+
+    Two outcomes fail closed:
+
+        EPHEMERIS_COVERAGE_EXHAUSTED  no pinned artifact declares any
+                                      directional territory beyond the
+                                      anchor
+        EPHEMERIS_REACH_EXHAUSTED     an artifact declares the territory,
+                                      but this computation cannot be
+                                      evaluated across it
+
+    The second is deliberately not reported as inconsistent kernel coverage.
+    The BSP metadata is not inconsistent - the segments are exactly what JPL
+    published. The limit belongs to a computation that resolves light time,
+    not to the data.
+
+    No observer is accepted, no event kind is accepted, and no HTTP
+    semantics are decided here.
+    """
+    anchor = _exact_finite_tt(anchor_tt, "anchor tt")
+    horizon = _exact_finite_tt(horizon_tt, "horizon tt")
+
+    if anchor == horizon:
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SEARCH FRONTIER INVALID - the anchor and the horizon are the "
+            "same state, TT %r, so the requested frontier has no direction"
+            % (anchor,),
+        )
+
+    backward = horizon < anchor
+    requested_lo = horizon if backward else anchor
+    requested_hi = anchor if backward else horizon
+
+    kernel_name = _admit_geocentric_bracket(requested_lo, requested_hi)
+
+    if kernel_name is not None:
+        return GeocentricSearchFrontier(
+            kernel=kernel_name,
+            tt_lo=requested_lo,
+            tt_hi=requested_hi,
+            complete=True,
+            truncation_reason=None,
+        )
+
+    holder = select_kernel_containing_instant(anchor)
+
+    if holder is None:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+            "EPHEMERIS COVERAGE EXHAUSTED - no pinned NASA/JPL artifact "
+            "declares coverage for the anchor state TT %r, so no directional "
+            "search frontier exists there" % (anchor,),
+        )
+
+    coverage = kernel_coverage_tt(holder)
+
+    # Shortened to the authoritative bound, never widened past what was
+    # requested. The anchor side is untouched.
+    if backward:
+        frontier_lo = max(requested_lo, coverage.tt_start)
+        frontier_hi = requested_hi
+        collapsed = not frontier_lo < anchor
+    else:
+        frontier_lo = requested_lo
+        frontier_hi = min(requested_hi, coverage.tt_end)
+        collapsed = not anchor < frontier_hi
+
+    if collapsed:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+            "EPHEMERIS COVERAGE EXHAUSTED - the declared coverage of %s ends "
+            "at the anchor state TT %r, so no authoritative territory exists "
+            "in the requested direction" % (holder, anchor),
+        )
+
+    kernel_name = _admit_geocentric_bracket(frontier_lo, frontier_hi)
+
+    if kernel_name is not None:
+        return GeocentricSearchFrontier(
+            kernel=kernel_name,
+            tt_lo=frontier_lo,
+            tt_hi=frontier_hi,
+            complete=False,
+            truncation_reason=REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+        )
+
+    if select_kernel_for_interval(frontier_lo, frontier_hi) is None:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+            "EPHEMERIS COVERAGE EXHAUSTED - no pinned NASA/JPL artifact "
+            "declares the whole frontier TT %r .. %r"
+            % (frontier_lo, frontier_hi),
+        )
+
+    # The frontier is declared, but this computation could not be evaluated
+    # across all of it.
+    #
+    # Exactly one recovery is authorized, and only for the geometry the
+    # evidence establishes: a BACKWARD frontier whose far endpoint sits in
+    # the unevaluable prefix above an artifact's declared start. There the
+    # far state lies strictly below the anchor, the far state is observed
+    # unevaluable, the anchor is observed evaluable, and one artifact
+    # declares the whole interval - so a first evaluable state exists
+    # strictly between them and is located exactly rather than estimated.
+    # Territory that is genuinely authoritative and genuinely evaluable is
+    # kept instead of being discarded.
+    #
+    # The boundary is located by the neutral binary64 search, handed this
+    # computation's own probe. That matters: the boundary it returns belongs
+    # to the computation it was given and to no other, which is why the
+    # sunset frontier's boundary could not have been borrowed.
+    #
+    # Nothing else is recovered, and the temporal roles are never reversed.
+    # A forward request whose anchor is itself unevaluable has no supported
+    # territory beginning at that anchor, and the anchor is never moved, so
+    # it falls through and fails closed below.
+    if backward:
+        for kernel_name in PINNED_KERNEL_PRECEDENCE:
+            coverage = kernel_coverage_tt(kernel_name)
+
+            if not (coverage.tt_start <= frontier_lo
+                    and frontier_hi <= coverage.tt_end):
+                continue
+
+            season_at = almanac.seasons(load_kernel(kernel_name))
+
+            if _observation_is_evaluable(season_at, frontier_lo):
+                continue
+
+            if not _observation_is_evaluable(season_at, anchor):
+                continue
+
+            return GeocentricSearchFrontier(
+                kernel=kernel_name,
+                tt_lo=_first_evaluable_state(
+                    season_at, frontier_lo, anchor
+                ),
+                tt_hi=frontier_hi,
+                complete=False,
+                truncation_reason=REASON_EPHEMERIS_REACH_EXHAUSTED,
+            )
+
+    raise SunsetChronologyError(
+        REASON_EPHEMERIS_REACH_EXHAUSTED,
+        "EPHEMERIS REACH EXHAUSTED - the frontier TT %r .. %r is declared by "
+        "a pinned NASA/JPL artifact, but the geocentric solar-longitude "
+        "computation cannot be evaluated from the anchor state TT %r onward, "
+        "and the anchor is not moved" % (frontier_lo, frontier_hi, anchor),
+    )
