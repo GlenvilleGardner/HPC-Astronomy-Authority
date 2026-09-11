@@ -1471,3 +1471,141 @@ def find_sunset_predecessor(tt, latitude, longitude):
         "absence of a sunset is not established"
         % (anchor, frontier.tt_lo, frontier.tt_hi),
     )
+
+
+# ---------------------------------------------------------------------------
+# A2-3c - strict arbitrary-instant sunset successor.
+#
+# WHAT THIS OPERATION ADDS
+#
+# One astronomical question: what is the earliest genuine observer-local
+# astronomical topocentric apparent sunset strictly after an arbitrary exact
+# Terrestrial Time anchor? It is the directional mirror of A2-3b and answers
+# the forward half of the same chronology.
+#
+# WHY THIS IS NOT THE FROZEN A1b SUCCESSOR
+#
+# A1b continues from a state already proven to lie on the far side of a
+# known crossing: it validates that the Sun is down at the supplied state
+# and refuses otherwise, because a continuation witness that is not
+# post-transition does not describe the far side of a sunset. That
+# precondition is what makes its search safe, and it is also what makes it a
+# different question from this one.
+#
+# The anchor here is arbitrary. It may fall anywhere inside a local
+# sunset-bounded day, including while the Sun is up, where A1b correctly
+# refuses to continue. A2-3c therefore inherits none of A1b's machinery: no
+# minimum-gap rule, no continuation-witness semantics, no post-transition
+# assumption, no civil-year kernel selection and no route behavior. A1b is
+# neither modified nor consulted.
+#
+# WHAT IT DELEGATES
+#
+# Which pinned NASA/JPL artifact may answer, and over exactly what interval,
+# is not decided here. A2-3c asks A2-3a for a forward supported frontier and
+# searches inside exactly what it is given, under exactly the artifact it
+# names. Observer validation, declared certified coverage, computation
+# evaluability, governed precedence, anchor immobility and the contiguity of
+# the examined territory are all owned by that substrate. None of it is
+# re-derived, re-checked against a second artifact, or worked around.
+#
+# STRICT ORDERING
+#
+# A crossing qualifies only when its exact binary64 TT is strictly greater
+# than the anchor. One comparison decides it. There is no epsilon, no
+# tolerance, no minimum gap, no event-identity rule, no nearest-event
+# heuristic and no nominal-day arithmetic.
+#
+# A crossing exactly equal to the anchor belongs to neither direction and is
+# excluded by that same comparison. An anchor that is itself a determined
+# sunset root needs no special handling at all: the certified root finder
+# returns the upper end of its converged bracket, at which the Sun is
+# already down, so the crossing that produced such an anchor presents no
+# sign change inside this frontier and cannot be rediscovered. The sunset
+# after it is returned.
+#
+# The certified root finder reports crossings in ascending time, so the
+# first qualifying crossing is the earliest one.
+#
+# ABSENCE IS NOT EXHAUSTION
+#
+# None means the entire requested directional horizon was authoritatively
+# covered, actually evaluable, and contained no qualifying sunset. It is a
+# scientific answer.
+#
+# A frontier that stopped short and contained no qualifying sunset is not
+# that answer and raises the reason its territory ran out. A qualifying
+# sunset found inside a shortened frontier IS a complete answer to the
+# nearest-event question, because the territory from the anchor through that
+# sunset was examined continuously.
+# ---------------------------------------------------------------------------
+
+
+def find_sunset_from_instant(tt, latitude, longitude):
+    """Return the earliest genuine sunset strictly after an arbitrary anchor.
+
+    ``tt`` is an exact binary64 Terrestrial Time state. It is arbitrary: it
+    need not be a sunset, and unlike a continuation witness it need not lie
+    on the far side of one.
+
+    Returns a SunsetEvent, or None when the entire requested directional
+    horizon was authoritatively supported and contained no sunset - the
+    genuine polar outcome.
+
+    Fails closed, preserving the substrate's own stable reason, when the
+    anchor state is malformed, the observer lies outside the governed
+    geodetic domain, or authoritative coverage or computational reach ends
+    before the horizon without a qualifying sunset having been found first.
+
+    No HTTP semantics are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+
+    frontier = supported_search_frontier(
+        anchor, anchor + SUCCESSOR_SEARCH_SPAN_DAYS, latitude, longitude
+    )
+
+    is_sun_up = almanac.sunrise_sunset(
+        load_kernel(frontier.kernel), wgs84.latlon(latitude, longitude)
+    )
+
+    # The frontier was admitted by probing this same computation at both of
+    # its endpoints, so a failure in here is not expected. If one occurs the
+    # examined territory is no longer whole, and the only honest response is
+    # to fail closed: the frontier is never abandoned for another artifact,
+    # never resumed past the failure, and never stitched to a second
+    # interval, because any of those would answer a different question.
+    try:
+        times, events = almanac.find_discrete(
+            ts.tt_jd(frontier.tt_lo), ts.tt_jd(frontier.tt_hi), is_sun_up
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no sunset is "
+            "reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    for t, sun_is_up in zip(times, events):
+        if bool(sun_is_up):
+            continue
+
+        event_tt = float(t.tt)
+
+        if event_tt > anchor:
+            return SunsetEvent(tt=event_tt, kernel=frontier.kernel)
+
+    if frontier.complete:
+        return None
+
+    raise SunsetChronologyError(
+        frontier.truncation_reason,
+        "SUNSET SUCCESSOR UNRESOLVED - no sunset lies strictly after the "
+        "anchor state TT %r inside the supported frontier TT %r .. %r, and "
+        "that frontier stopped short of the requested horizon, so the "
+        "absence of a sunset is not established"
+        % (anchor, frontier.tt_lo, frontier.tt_hi),
+    )
