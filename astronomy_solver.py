@@ -1308,3 +1308,166 @@ def supported_search_frontier(anchor_tt, horizon_tt, latitude, longitude):
         "computation cannot be evaluated from the anchor state TT %r onward, "
         "and the anchor is not moved" % (frontier_lo, frontier_hi, anchor),
     )
+
+
+# ---------------------------------------------------------------------------
+# A2-3b - strict sunset predecessor.
+#
+# WHAT THIS OPERATION ADDS
+#
+# One astronomical question: what is the latest genuine observer-local
+# astronomical topocentric apparent sunset strictly before an arbitrary exact
+# Terrestrial Time anchor? Nothing else. No successor direction, no route, no
+# transport representation and no HTTP semantics are decided here.
+#
+# The anchor is arbitrary. It need not be a sunset, need not be
+# post-transition, and carries no proof of which side of a crossing it lies
+# on. That is why this is a separate question from the frozen A1b successor,
+# which continues from a state already proven to sit on the far side of a
+# crossing and is neither modified nor consulted here.
+#
+# WHAT IT DELEGATES
+#
+# Which pinned NASA/JPL artifact may answer, over exactly what interval, is
+# not decided here. A2-3b asks A2-3a for a backward supported frontier and
+# searches inside exactly what it is given, using exactly the artifact it
+# names. Observer validation, declared certified coverage, computation
+# evaluability, governed precedence, anchor immobility and the contiguity of
+# the examined territory are all owned by that substrate. None of it is
+# re-derived, re-checked against a second artifact, or worked around.
+#
+# STRICT ORDERING
+#
+# A crossing qualifies only when its exact binary64 TT is strictly less than
+# the anchor. One comparison decides it. There is no epsilon, no tolerance,
+# no minimum gap, no event-identity rule, no nearest-event heuristic and no
+# nominal-day arithmetic.
+#
+# A crossing exactly equal to the anchor belongs to neither direction and is
+# excluded. This is not a special case in the code: the same strict
+# comparison covers it. An anchor that is itself a previously determined
+# sunset root is re-reported by the certified root finder as exactly that
+# root, so it fails the comparison and the sunset before it is returned.
+#
+# Roots found under different search brackets may differ in their final
+# bits. That is an inherited numerical property of the certified root finder,
+# not something this block repairs; repairing it would require an
+# event-identity tolerance, which is precisely what is forbidden.
+#
+# ABSENCE IS NOT EXHAUSTION
+#
+# None means the entire requested directional horizon was authoritatively
+# covered, actually evaluable, and contained no qualifying sunset. It is a
+# scientific answer.
+#
+# A frontier that stopped short and contained no qualifying sunset is not
+# that answer, and must never be reported as one. It raises the reason its
+# territory ran out. A qualifying sunset found inside a shortened frontier IS
+# a complete answer to the nearest-event question, because the territory from
+# the anchor through that sunset was examined continuously.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SunsetEvent:
+    """A determined sunset and the artifact that actually produced it.
+
+    ``tt`` is float(t.tt) read directly from the Skyfield Time object the
+    certified root finder returned. It is never derived from a datetime, ISO
+    text, Unix seconds or milliseconds, so it is the exact state the crossing
+    was found at.
+
+    ``kernel`` is the pinned NASA/JPL artifact the search actually ran under,
+    as selected from actual certified coverage and evaluability. It is
+    computation provenance, not a routing decision.
+
+    No transport representation is carried, deliberately. Terrestrial Time is
+    the astronomical state; a calendar rendering is a presentation concern
+    belonging to a later layer, and one that cannot always be formed - the
+    standard library cannot represent a datetime for the deep-time events
+    this solver legitimately returns, so a datetime field would make a
+    genuine answer impossible to construct. ts.tt_jd(event.tt) reconstructs
+    the exact Time whenever a representation is needed.
+
+    Named fields, deliberately not a tuple: no call site can unpack an event
+    positionally, so a later change to field order cannot silently transpose
+    the state and its provenance.
+    """
+
+    tt: float
+    kernel: str
+
+
+def find_sunset_predecessor(tt, latitude, longitude):
+    """Return the latest genuine sunset strictly before an arbitrary anchor.
+
+    ``tt`` is an exact binary64 Terrestrial Time state. It is arbitrary: it
+    need not be a sunset and need not lie on any particular side of a
+    crossing.
+
+    Returns a SunsetEvent, or None when the entire requested directional
+    horizon was authoritatively supported and contained no sunset - the
+    genuine polar outcome.
+
+    Fails closed, preserving the substrate's own stable reason, when the
+    anchor state is malformed, the observer lies outside the governed
+    geodetic domain, or authoritative coverage or computational reach ends
+    before the horizon without a qualifying sunset having been found first.
+
+    No HTTP semantics are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+
+    frontier = supported_search_frontier(
+        anchor, anchor - SUCCESSOR_SEARCH_SPAN_DAYS, latitude, longitude
+    )
+
+    is_sun_up = almanac.sunrise_sunset(
+        load_kernel(frontier.kernel), wgs84.latlon(latitude, longitude)
+    )
+
+    # The frontier was admitted by probing this same computation at both of
+    # its endpoints, so a failure in here is not expected. If one occurs the
+    # examined territory is no longer whole, and the only honest response is
+    # to fail closed: the frontier is never abandoned for another artifact,
+    # never resumed past the failure, and never stitched to a second
+    # interval, because any of those would answer a different question.
+    try:
+        times, events = almanac.find_discrete(
+            ts.tt_jd(frontier.tt_lo), ts.tt_jd(frontier.tt_hi), is_sun_up
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no sunset is "
+            "reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    latest = None
+
+    for t, sun_is_up in zip(times, events):
+        if bool(sun_is_up):
+            continue
+
+        event_tt = float(t.tt)
+
+        if event_tt < anchor:
+            latest = event_tt
+
+    if latest is not None:
+        return SunsetEvent(tt=latest, kernel=frontier.kernel)
+
+    if frontier.complete:
+        return None
+
+    raise SunsetChronologyError(
+        frontier.truncation_reason,
+        "SUNSET PREDECESSOR UNRESOLVED - no sunset lies strictly before the "
+        "anchor state TT %r inside the supported frontier TT %r .. %r, and "
+        "that frontier stopped short of the requested horizon, so the "
+        "absence of a sunset is not established"
+        % (anchor, frontier.tt_lo, frontier.tt_hi),
+    )
