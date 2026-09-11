@@ -72,7 +72,7 @@ A2_BLOCK_MARKER = "# A2-1 - certified kernel coverage substrate."
 # The shape of a governed production block header, used only to find where
 # THIS block ends. It matches the header FORM and nothing else, so A2-1
 # certification governs the A2-1 block and stops.
-GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-[0-9a-z]+)? - ",
                                    re.MULTILINE)
 
 

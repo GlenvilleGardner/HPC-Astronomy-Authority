@@ -108,7 +108,7 @@ POLAR_CASES = (
 
 A2_4_BLOCK_MARKER = "# A2-4 - atomic sunset bracket."
 
-GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-[0-9a-z]+)? - ",
                                    re.MULTILINE)
 
 

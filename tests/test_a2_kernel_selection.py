@@ -85,7 +85,7 @@ A2_BLOCK_MARKER = "# A2-2 - data-authoritative kernel selection."
 # which tokens it may legitimately contain. A2-2 certification therefore
 # governs the A2-2 block and stops, instead of silently annexing every
 # governed block written after it.
-GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-[0-9a-z]+)? - ",
                                    re.MULTILINE)
 
 

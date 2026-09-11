@@ -112,7 +112,7 @@ OBSERVERS = (
 
 A2_3C_BLOCK_MARKER = "# A2-3c - strict arbitrary-instant sunset successor."
 
-GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-[0-9a-z]+)? - ",
                                    re.MULTILINE)
 
 

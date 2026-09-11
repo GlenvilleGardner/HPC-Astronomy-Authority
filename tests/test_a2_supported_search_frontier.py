@@ -140,7 +140,7 @@ A2_3A_BLOCK_MARKER = "# A2-3a - supported directional search frontier."
 
 # The shape of a governed production block header, used only to find where
 # the A2-3a block ends. It matches the header FORM and nothing else.
-GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-[0-9a-z]+)? - ",
                                    re.MULTILINE)
 
 

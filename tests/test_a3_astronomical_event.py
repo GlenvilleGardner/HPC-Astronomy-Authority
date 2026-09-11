@@ -97,7 +97,7 @@ REPRESENTATIVE_TT = (
 
 A3A_BLOCK_MARKER = "# A3a - exact astronomical event record."
 
-GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-[0-9a-z]+)? - ",
                                    re.MULTILINE)
 
 
