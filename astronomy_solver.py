@@ -1743,3 +1743,82 @@ def find_sunset_bracket(tt, latitude, longitude):
     return SunsetBracket(
         anchor=anchor, previous=previous, next=next_sunset
     )
+
+
+# ---------------------------------------------------------------------------
+# A3a - exact astronomical event record.
+#
+# WHAT THIS OPERATION ADDS
+#
+# The record an astronomical event instant is carried in, and the governed
+# identities for the four solar-longitude crossings. Substrate only: nothing
+# is computed, nothing is validated, nothing is served, and no existing
+# caller is migrated onto it.
+#
+# WHY A RECORD AT ALL
+#
+# An event that leaves this module as formatted text is no longer the event
+# that was computed. Rendering a crossing to whole seconds moves it by up to
+# half a second, and the text cannot reconstruct the state it came from, so
+# a downstream consumer handed only that text is holding a different instant
+# and has no way to know it. The exact Terrestrial Time of the root is the
+# scientific state; a calendar rendering is a view of it, produced later and
+# elsewhere, and never the authority.
+#
+# TT IS SUFFICIENT
+#
+# Barycentric Dynamical Time is recoverable from Terrestrial Time through
+# the certified timescale, so carrying it here would duplicate derived data
+# rather than preserve source data. That is the opposite of the coverage
+# substrate, which preserves raw JD(TDB) because BSP segment metadata is
+# published in that scale and is genuinely the source there. An event is a
+# computed root whose native output is TT.
+#
+# NO TRANSPORT REPRESENTATION
+#
+# No datetime, ISO text, Unix value or civil field appears. The standard
+# library cannot represent a datetime for the deep-time events this
+# Authority legitimately determines, so a transport field would make a
+# genuine event impossible to construct. ts.tt_jd(event.tt) reconstructs
+# the exact Time whenever a representation is wanted.
+#
+# IDENTITIES CARRY NO CALENDAR AND NO HEMISPHERE
+#
+# The four crossings are identified by the apparent geocentric solar
+# ecliptic longitude that defines them. Season names are hemisphere
+# conventions - the 180 degree crossing opens spring in Sydney and autumn in
+# New York - and month names are Gregorian. Neither can be the identity used
+# by a data-first astronomical authority, so neither is used here.
+# ---------------------------------------------------------------------------
+
+SOLAR_LONGITUDE_000 = "SOLAR_LONGITUDE_000"
+SOLAR_LONGITUDE_090 = "SOLAR_LONGITUDE_090"
+SOLAR_LONGITUDE_180 = "SOLAR_LONGITUDE_180"
+SOLAR_LONGITUDE_270 = "SOLAR_LONGITUDE_270"
+
+
+@dataclass(frozen=True)
+class AstronomicalEvent:
+    """A determined astronomical instant and what produced it.
+
+    ``tt`` is the exact binary64 Terrestrial Time of the root, read directly
+    from the Skyfield Time object the certified search returned. It is never
+    derived from a datetime, ISO text, Unix seconds or milliseconds, so it is
+    the state the event was actually found at rather than a rendering of it.
+    It is the authoritative event state for this record.
+
+    ``kind`` is one of the governed solar-longitude identities above. It
+    states the astronomical condition the crossing satisfies and carries no
+    hemisphere, month, year or other calendar meaning.
+
+    ``kernel`` is the pinned NASA/JPL artifact the determination actually ran
+    under. It is computation provenance, not a routing decision.
+
+    Named fields, deliberately not a tuple: no call site can unpack an event
+    positionally, so a later change to field order cannot silently transpose
+    the state, its identity and its provenance.
+    """
+
+    tt: float
+    kind: str
+    kernel: str
