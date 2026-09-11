@@ -35,6 +35,7 @@ actual reach problem belongs to A2-3.
 
 import ast
 import inspect
+import re
 import unittest
 
 import astronomy_solver
@@ -77,6 +78,15 @@ DEFECT_WINDOW_CIVIL_YEAR = 2650
 BRACKET_SPAN_DAYS = 3.0
 
 A2_BLOCK_MARKER = "# A2-2 - data-authoritative kernel selection."
+
+# The shape of a governed production block header, used only to find where
+# THIS block ends. It matches the header FORM and nothing else: it does not
+# know which block follows A2-2, what that block is called, what it does, or
+# which tokens it may legitimately contain. A2-2 certification therefore
+# governs the A2-2 block and stops, instead of silently annexing every
+# governed block written after it.
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+                                   re.MULTILINE)
 
 
 def coverage(kernel_name):
@@ -450,7 +460,9 @@ class TestA2SelectionStructuralIndependence(unittest.TestCase):
         source = inspect.getsource(astronomy_solver)
         index = source.find(A2_BLOCK_MARKER)
         self.assertNotEqual(index, -1, "A2-2 block marker not found")
-        self.block = source[index:]
+        following = GOVERNED_BLOCK_MARKER.search(
+            source, index + len(A2_BLOCK_MARKER))
+        self.block = source[index:following.start() if following else len(source)]
         self.preamble = source[:index]
         self.executable = self._executable_source(self.block)
 
@@ -458,6 +470,13 @@ class TestA2SelectionStructuralIndependence(unittest.TestCase):
         self.assertIn("def select_kernel_containing_instant", self.block)
         self.assertIn("def select_kernel_for_interval", self.block)
         self.assertGreater(len(self.block), 1000)
+
+    def test_block_stops_at_the_next_governed_block(self):
+        """The scan must cover A2-2 and end there, not annex what follows."""
+        self.assertIsNone(
+            GOVERNED_BLOCK_MARKER.search(self.block, len(A2_BLOCK_MARKER)),
+            "the A2-2 scan reaches into a later governed block",
+        )
 
     def test_block_does_not_use_civil_routing_or_legacy_guards(self):
         # The oracle must not pass by inspecting nothing.

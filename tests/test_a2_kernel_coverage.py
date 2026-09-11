@@ -43,6 +43,7 @@ performed by the unit under test.
 import ast
 import inspect
 import math
+import re
 import unittest
 from unittest import mock
 
@@ -67,6 +68,12 @@ REASON_SEGMENTS_UNAVAILABLE = "KERNEL_SEGMENTS_UNAVAILABLE"
 REASON_INSTANT_INVALID = "INSTANT_STATE_INVALID"
 
 A2_BLOCK_MARKER = "# A2-1 - certified kernel coverage substrate."
+
+# The shape of a governed production block header, used only to find where
+# THIS block ends. It matches the header FORM and nothing else, so A2-1
+# certification governs the A2-1 block and stops.
+GOVERNED_BLOCK_MARKER = re.compile(r"^# A\d+[a-z]?(?:-\d+[a-z]?)? - ",
+                                   re.MULTILINE)
 
 
 # --- Stub kernel surface ---------------------------------------------------
@@ -448,7 +455,9 @@ class TestA2BlockStructuralIndependence(unittest.TestCase):
         source = inspect.getsource(astronomy_solver)
         index = source.find(A2_BLOCK_MARKER)
         self.assertNotEqual(index, -1, "A2-1 block marker not found")
-        self.block = source[index:]
+        following = GOVERNED_BLOCK_MARKER.search(
+            source, index + len(A2_BLOCK_MARKER))
+        self.block = source[index:following.start() if following else len(source)]
         self.preamble = source[:index]
         self.executable = self._executable_source(self.block)
 
@@ -456,6 +465,13 @@ class TestA2BlockStructuralIndependence(unittest.TestCase):
         self.assertIn("def kernel_coverage_tt", self.block)
         self.assertIn("def _exact_finite_tt", self.block)
         self.assertGreater(len(self.block), 1000)
+
+    def test_block_stops_at_the_next_governed_block(self):
+        """The scan must cover A2-1 and end there, not annex what follows."""
+        self.assertIsNone(
+            GOVERNED_BLOCK_MARKER.search(self.block, len(A2_BLOCK_MARKER)),
+            "the A2-1 scan reaches into a later governed block",
+        )
 
     def test_block_does_not_use_civil_routing_or_legacy_guards(self):
         # The oracle must not pass by inspecting nothing.
