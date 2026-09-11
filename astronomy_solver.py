@@ -6,6 +6,7 @@ from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from skyfield.api import load, wgs84
 from skyfield import almanac
+from skyfield.errors import EphemerisRangeError
 
 from scientific_environment import ScientificEnvironmentError
 
@@ -807,3 +808,503 @@ def select_kernel_for_interval(tt_lo, tt_hi):
             return kernel_name
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# A2-3a - supported directional search frontier.
+#
+# WHAT THIS OPERATION ADDS
+#
+# The ability to ask, for one directional search, which pinned NASA/JPL
+# artifact can actually support it and over exactly what interval. Nothing
+# else. No event is solved, no crossing is selected, no ordering rule is
+# applied and no route is served; each of those is a separate governed
+# operation.
+#
+# TWO QUESTIONS, KEPT SEPARATE
+#
+# A2-1 and A2-2 answer the first question: does authoritative NASA/JPL data
+# DECLARE coverage for the required state or interval? They deliberately
+# make no claim about the second: can the actual topocentric solar
+# computation be EVALUATED there?
+#
+# The two are not the same statement, and neither one alone is sufficient.
+#
+#   Declared coverage is not sufficient. earth.at(t).observe(sun) resolves
+#   light time, so it reads the Sun, and the deflecting bodies, at t minus
+#   the one-way light time. A state at an artifact's exact declared start is
+#   therefore declared-covered while the observation cannot be formed there.
+#
+#   Evaluating without raising is not sufficient either. The certified
+#   computational stack has been observed to return evaluations beyond
+#   declared BSP coverage rather than refusing them, so a successful
+#   computation cannot substitute for explicit declared-coverage
+#   containment. Silence above a declared bound is evidence of nothing, and
+#   the declared containment test below - not an ephemeris range error - is
+#   the binding upper guard.
+#
+# Support is consequently defined as the conjunction: an artifact must
+# DECLARE the whole bracket and the actual certified predicate must
+# EVALUATE at the bracket's endpoints. Neither half is trusted alone.
+#
+# NO MARGIN IS ENCODED
+#
+# The lower reach is the converged one-way light time from the Sun at that
+# epoch. It is a physical quantity that varies with the Earth-Sun distance,
+# not a constant, and it differs between artifacts because their declared
+# starts fall at different points in the orbit. No fixed lookback, slack,
+# safety margin or second-count of any size appears in this block. The
+# reach is never modelled and never predicted: it is established by
+# performing the actual computation and observing whether the certified
+# machinery can complete it.
+#
+# CONTIGUITY
+#
+# Exactly one bracket is returned, anchored at the caller's anchor state and
+# examined by exactly one artifact. There is no second bracket, no
+# resumption and no stitching, so no unsupported temporal gap can be
+# crossed, skipped, or resumed beyond. The certified root finder refines by
+# convex combination of existing grid points and therefore samples nowhere
+# outside the bracket it is given, so a bracket proven supported at its
+# endpoints bounds the entire examined frontier.
+#
+# The anchor is never moved. A frontier may stop short of the requested
+# horizon, but it always still touches the anchor.
+#
+# A TRUNCATED FRONTIER IS NOT AN OUTCOME
+#
+# When authoritative or evaluable territory ends before the requested
+# horizon, the frontier is returned SHORT rather than refused, carrying
+# complete=False and the reason its territory ran out. Whether that is a
+# complete answer or an exhaustion report is not decided here: an event
+# found inside a truncated frontier was reached across continuously examined
+# authoritative territory and is a complete answer to the nearest-event
+# question, while an empty truncated frontier is an exhaustion report and
+# must never be presented as an absence of sunset. That determination
+# belongs to the solver, which is a separate governed operation.
+#
+# complete=True is the only state from which a caller may conclude that the
+# entire requested directional horizon was authoritatively covered and
+# actually evaluable.
+# ---------------------------------------------------------------------------
+
+REASON_EPHEMERIS_COVERAGE_EXHAUSTED = "EPHEMERIS_COVERAGE_EXHAUSTED"
+REASON_EPHEMERIS_REACH_EXHAUSTED = "EPHEMERIS_REACH_EXHAUSTED"
+REASON_OBSERVER_OUT_OF_DOMAIN = "OBSERVER_OUT_OF_DOMAIN"
+
+# The governed geodetic observer domain, stated here as scientific input to
+# the topocentric solar computation.
+#
+# It is deliberately NOT imported from sunset_cursor: that module owns a
+# transport and serialization domain and sits above this one, and importing
+# it here would invert the layering by making the solver depend on the
+# continuation-witness encoding. The two domains must agree, and a later
+# certification operation asserts that they do rather than one silently
+# deriving from the other.
+OBSERVER_LATITUDE_DOMAIN = (-90.0, 90.0)
+OBSERVER_LONGITUDE_DOMAIN = (-180.0, 180.0)
+
+
+@dataclass(frozen=True)
+class SupportedSearchFrontier:
+    """The interval one directional search may actually be performed over.
+
+    ``kernel`` is the pinned NASA/JPL artifact that both declares the
+    interval and was observed to evaluate the certified topocentric solar
+    computation across it.
+
+    ``tt_lo`` and ``tt_hi`` are the frontier in ascending Terrestrial Time,
+    ready to bound a search directly. Ascending order is a property of the
+    record, not a statement about direction: which endpoint is the anchor is
+    known to the caller that supplied it, and the anchor is never moved.
+
+    ``complete`` is True only when the frontier is the entire requested
+    horizon. False means authoritative or evaluable territory ended first
+    and the frontier was shortened to where it genuinely ends - the anchor
+    side is unchanged and the examined territory remains contiguous from it.
+
+    ``truncation_reason`` is None when ``complete`` is True, and otherwise
+    carries the stable code describing why the territory ran out, so a
+    caller that finds no event inside a shortened frontier can report that
+    exhaustion faithfully instead of reporting an absence of sunset.
+
+    Named fields, deliberately not a tuple: no call site can unpack a
+    frontier positionally, so a later change to field order cannot silently
+    transpose the bounds or invert the completeness flag.
+    """
+
+    kernel: str
+    tt_lo: float
+    tt_hi: float
+    complete: bool
+    truncation_reason: str | None
+
+
+def _governed_observer(value, field, domain):
+    """Accept only a real, finite observer coordinate inside its domain.
+
+    An observer coordinate is not an instant state, so it never reports
+    INSTANT_STATE_INVALID. It has its own stable reason.
+
+    This validation is a precondition of the failure taxonomy rather than
+    ordinary input hygiene. A non-finite latitude reaches the ephemeris as
+    an invalid cast and surfaces as an ephemeris range error - the exact
+    signal this module reads as exhausted computational reach - so an
+    unvalidated observer would be reported as a scientific limit of the
+    NASA/JPL data. A latitude outside the geodetic domain is worse: it
+    computes silently and would be reported as a genuine absence of sunset.
+
+    bool is rejected before the numeric check because it is a subclass of
+    int and would otherwise be silently accepted as 0.0 or 1.0.
+
+    Signed zero is deliberately NOT canonicalized. That rule belongs to the
+    continuation witness, where it makes a serialized observer binding
+    unique; -0.0 and +0.0 are the same coordinate to the geometry here.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SunsetChronologyError(
+            REASON_OBSERVER_OUT_OF_DOMAIN,
+            "SUNSET CHRONOLOGY OBSERVER OUT OF DOMAIN - %s must be a real "
+            "number, received %s" % (field, type(value).__name__),
+        )
+
+    try:
+        number = float(value)
+    except OverflowError as error:
+        raise SunsetChronologyError(
+            REASON_OBSERVER_OUT_OF_DOMAIN,
+            "SUNSET CHRONOLOGY OBSERVER OUT OF DOMAIN - %s is too large to "
+            "represent as a float" % field,
+        ) from error
+
+    if not math.isfinite(number):
+        raise SunsetChronologyError(
+            REASON_OBSERVER_OUT_OF_DOMAIN,
+            "SUNSET CHRONOLOGY OBSERVER OUT OF DOMAIN - %s must be finite, "
+            "received %r" % (field, value),
+        )
+
+    low, high = domain
+    if number < low or number > high:
+        raise SunsetChronologyError(
+            REASON_OBSERVER_OUT_OF_DOMAIN,
+            "SUNSET CHRONOLOGY OBSERVER OUT OF DOMAIN - %s must lie "
+            "inclusively within [%r, %r], received %r"
+            % (field, low, high, number),
+        )
+
+    return number
+
+
+def _observation_is_evaluable(is_sun_up, tt):
+    """Report whether the certified computation actually completes at ``tt``.
+
+    The question is answered by performing the real topocentric solar
+    computation, not by predicting it. Only an ephemeris range error is
+    treated as an answer: it is the certified machinery reporting that a
+    required record lies outside the published coefficients, which is
+    conclusive proof that the observation cannot be formed.
+
+    Nothing else is caught. Any other failure is not a statement about
+    ephemeris support and must propagate rather than be recorded here as
+    absent reach.
+
+    A True result is never used on its own. Every caller has already
+    required the state to lie inside declared certified coverage, because
+    the certified stack has been observed to return evaluations beyond
+    declared coverage rather than refusing them, so completing without
+    raising above a declared bound proves nothing.
+    """
+    try:
+        is_sun_up(ts.tt_jd(tt))
+    except EphemerisRangeError:
+        return False
+
+    return True
+
+
+def _first_evaluable_state(is_sun_up, unevaluable_tt, evaluable_tt):
+    """Return the exact earliest TT state at which the computation completes.
+
+    PRECONDITION, required of every caller:
+
+        unevaluable_tt < evaluable_tt
+
+    ``unevaluable_tt`` must be a state the computation was ACTUALLY OBSERVED
+    to fail at, and ``evaluable_tt`` a later state it was ACTUALLY OBSERVED
+    to complete at. Neither is assumed, predicted or modelled. Calling this
+    with the temporal or evaluability roles reversed asks a question the
+    evidence does not support and is not permitted; the single call site
+    below establishes both roles by observation immediately beforehand.
+
+    The transition is located by interrogating the actual computation,
+    halving the interval until no representable binary64 value lies strictly
+    between the two ends. Termination is exhaustion of the representation
+    itself: there is no epsilon, no tolerance, no convergence threshold, no
+    iteration limit and no second-count, because once no representable state
+    remains between them there is nothing left to examine.
+
+    The result is exact rather than approximate. The returned state is
+    evaluable and its immediate binary64 predecessor is not, so no evaluable
+    state is discarded, and the answer does not depend on how wide the
+    starting interval was.
+
+    This is sound because the failing region is a contiguous prefix. A read
+    fails on the low side only when it falls below the segment start, and the
+    deepest read trails the requested state by the one-way solar light time,
+    which changes far more slowly than the state itself. The requested state
+    minus that lookback is therefore strictly increasing, so evaluability
+    never resumes and never lapses again.
+    """
+    bad = unevaluable_tt
+    good = evaluable_tt
+
+    while True:
+        mid = bad + (good - bad) / 2.0
+
+        if mid == bad or mid == good:
+            return good
+
+        if _observation_is_evaluable(is_sun_up, mid):
+            good = mid
+        else:
+            bad = mid
+
+
+def _admit_bracket(tt_lo, tt_hi, latitude, longitude):
+    """Return the artifact that both declares and can evaluate the bracket.
+
+    The governed precedence is evaluated in order and BOTH conditions are
+    required of each candidate. An artifact that declares the bracket but
+    cannot evaluate the computation at its endpoints does not end the scan:
+    the search continues to the next artifact, which may be able to. That
+    is a real and reachable case, not a defensive branch - a bracket
+    beginning at DE440's exact declared start is declared by DE440 and
+    cannot be evaluated under it, while DE441 part 1 declares the same
+    bracket and evaluates it. Stopping at the first declaring artifact would
+    refuse a fully supported search.
+
+    The declared containment test is exact, closed and inclusive, and
+    matches select_kernel_for_interval. It is restated rather than reused
+    because that function returns only the FIRST declaring artifact and
+    offers no way to continue past one, which is precisely what this scan
+    must do.
+
+    WHY TWO ENDPOINT PROBES CERTIFY THE WHOLE BRACKET
+
+    Under the certified runtime and pinned artifact set, every ephemeris
+    read the certified predicate makes at an observation state falls between
+    that state's own instant and that instant less the one-way solar light
+    time; the deflection reads are bounded to the same depth and go no
+    deeper. Both ends of that read window advance with the observation
+    state, because the light time changes by a fraction of a second per day
+    while the state advances by a day per day. The deepest read over an
+    interval is therefore made at its lower endpoint and the shallowest at
+    its upper endpoint, so an interval whose endpoints both evaluate has no
+    interior state that reads outside what those two already proved. The
+    certified root finder samples only inside the interval it is given, and
+    evaluates through the same path as these probes, so what is proven here
+    is what the search will actually require.
+
+    This is a property of the certified computational environment, not a
+    timeless one. A different runtime or artifact set could read
+    differently, so it is verified rather than assumed.
+
+    Returns None when no pinned artifact supports the whole bracket. That is
+    a support-query result, not a request failure: nothing is fabricated,
+    and None cannot be mistaken for an artifact name.
+    """
+    location = wgs84.latlon(latitude, longitude)
+
+    for kernel_name in PINNED_KERNEL_PRECEDENCE:
+        coverage = kernel_coverage_tt(kernel_name)
+
+        if not (coverage.tt_start <= tt_lo and tt_hi <= coverage.tt_end):
+            continue
+
+        is_sun_up = almanac.sunrise_sunset(load_kernel(kernel_name), location)
+
+        if (_observation_is_evaluable(is_sun_up, tt_lo)
+                and _observation_is_evaluable(is_sun_up, tt_hi)):
+            return kernel_name
+
+    return None
+
+
+def supported_search_frontier(anchor_tt, horizon_tt, latitude, longitude):
+    """Return the frontier a directional sunset search may be performed over.
+
+    ``anchor_tt`` is the exact binary64 Terrestrial Time state the search
+    starts from and is never moved: the returned frontier always touches it,
+    so examined territory is contiguous from the anchor. ``horizon_tt`` is
+    the exact TT state the search would like to reach. Direction is derived
+    from their order rather than declared, so a backward frontier cannot be
+    requested with the endpoints transposed. Both are exact TT states; no
+    civil year, Gregorian date, timezone or nominal duration participates.
+
+    An anchor equal to its horizon has no direction and fails closed as
+    malformed interval state.
+
+    Two outcomes are returned rather than raised:
+
+        complete=True   the entire requested horizon is declared by one
+                        artifact and the computation evaluates across it
+        complete=False  authoritative or evaluable territory ended first;
+                        the frontier reaches where it genuinely ends and
+                        carries the reason
+
+    Two outcomes fail closed:
+
+        EPHEMERIS_COVERAGE_EXHAUSTED  no pinned artifact declares any
+                                      directional territory beyond the
+                                      anchor
+        EPHEMERIS_REACH_EXHAUSTED     an artifact declares the territory,
+                                      but the certified topocentric solar
+                                      computation cannot be evaluated from
+                                      the anchor onward
+
+    The second is deliberately not reported as inconsistent kernel coverage.
+    The BSP metadata is not inconsistent - the segments are exactly what JPL
+    published. The limit belongs to a computation that resolves light time,
+    not to the data.
+
+    No HTTP semantics are decided here.
+    """
+    anchor = _exact_finite_tt(anchor_tt, "anchor tt")
+    horizon = _exact_finite_tt(horizon_tt, "horizon tt")
+    latitude = _governed_observer(
+        latitude, "latitude", OBSERVER_LATITUDE_DOMAIN
+    )
+    longitude = _governed_observer(
+        longitude, "longitude", OBSERVER_LONGITUDE_DOMAIN
+    )
+
+    if anchor == horizon:
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SUNSET CHRONOLOGY FRONTIER INVALID - the anchor and the horizon "
+            "are the same state, TT %r, so the requested frontier has no "
+            "direction" % (anchor,),
+        )
+
+    backward = horizon < anchor
+    requested_lo = horizon if backward else anchor
+    requested_hi = anchor if backward else horizon
+
+    kernel_name = _admit_bracket(
+        requested_lo, requested_hi, latitude, longitude
+    )
+
+    if kernel_name is not None:
+        return SupportedSearchFrontier(
+            kernel=kernel_name,
+            tt_lo=requested_lo,
+            tt_hi=requested_hi,
+            complete=True,
+            truncation_reason=None,
+        )
+
+    holder = select_kernel_containing_instant(anchor)
+
+    if holder is None:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+            "EPHEMERIS COVERAGE EXHAUSTED - no pinned NASA/JPL artifact "
+            "declares coverage for the anchor state TT %r, so no directional "
+            "search frontier exists there" % (anchor,),
+        )
+
+    coverage = kernel_coverage_tt(holder)
+
+    # Shortened to the authoritative bound, never widened past what was
+    # requested. The anchor side is untouched.
+    if backward:
+        frontier_lo = max(requested_lo, coverage.tt_start)
+        frontier_hi = requested_hi
+        collapsed = not frontier_lo < anchor
+    else:
+        frontier_lo = requested_lo
+        frontier_hi = min(requested_hi, coverage.tt_end)
+        collapsed = not anchor < frontier_hi
+
+    if collapsed:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+            "EPHEMERIS COVERAGE EXHAUSTED - the declared coverage of %s ends "
+            "at the anchor state TT %r, so no authoritative territory exists "
+            "in the requested direction" % (holder, anchor),
+        )
+
+    kernel_name = _admit_bracket(
+        frontier_lo, frontier_hi, latitude, longitude
+    )
+
+    if kernel_name is not None:
+        return SupportedSearchFrontier(
+            kernel=kernel_name,
+            tt_lo=frontier_lo,
+            tt_hi=frontier_hi,
+            complete=False,
+            truncation_reason=REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+        )
+
+    if select_kernel_for_interval(frontier_lo, frontier_hi) is None:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_COVERAGE_EXHAUSTED,
+            "EPHEMERIS COVERAGE EXHAUSTED - no pinned NASA/JPL artifact "
+            "declares the whole frontier TT %r .. %r"
+            % (frontier_lo, frontier_hi),
+        )
+
+    # The frontier is declared, but the computation could not be evaluated
+    # across all of it.
+    #
+    # Exactly one recovery is authorized, and only for the geometry the
+    # evidence established: a BACKWARD frontier whose far endpoint sits in
+    # the unevaluable prefix above an artifact's declared start. There the
+    # far state lies strictly below the anchor, the far state is observed
+    # unevaluable, the anchor is observed evaluable, and one artifact
+    # declares the whole interval - so a first evaluable state exists
+    # strictly between them and is located exactly rather than estimated.
+    # Territory that is genuinely authoritative and genuinely evaluable is
+    # kept instead of being discarded.
+    #
+    # Nothing else is recovered, and the temporal roles are never reversed.
+    # A forward request whose anchor is itself unevaluable has no supported
+    # territory beginning at that anchor, and the anchor is never moved, so
+    # it falls through and fails closed below.
+    if backward:
+        location = wgs84.latlon(latitude, longitude)
+
+        for kernel_name in PINNED_KERNEL_PRECEDENCE:
+            coverage = kernel_coverage_tt(kernel_name)
+
+            if not (coverage.tt_start <= frontier_lo
+                    and frontier_hi <= coverage.tt_end):
+                continue
+
+            is_sun_up = almanac.sunrise_sunset(
+                load_kernel(kernel_name), location
+            )
+
+            if _observation_is_evaluable(is_sun_up, frontier_lo):
+                continue
+
+            if not _observation_is_evaluable(is_sun_up, anchor):
+                continue
+
+            return SupportedSearchFrontier(
+                kernel=kernel_name,
+                tt_lo=_first_evaluable_state(is_sun_up, frontier_lo, anchor),
+                tt_hi=frontier_hi,
+                complete=False,
+                truncation_reason=REASON_EPHEMERIS_REACH_EXHAUSTED,
+            )
+
+    raise SunsetChronologyError(
+        REASON_EPHEMERIS_REACH_EXHAUSTED,
+        "EPHEMERIS REACH EXHAUSTED - the frontier TT %r .. %r is declared by "
+        "a pinned NASA/JPL artifact, but the certified topocentric solar "
+        "computation cannot be evaluated from the anchor state TT %r onward, "
+        "and the anchor is not moved" % (frontier_lo, frontier_hi, anchor),
+    )
