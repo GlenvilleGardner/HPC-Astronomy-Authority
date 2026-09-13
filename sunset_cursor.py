@@ -79,9 +79,13 @@ import base64
 import binascii
 import json
 import math
-import struct
 from collections import namedtuple
 
+from exact_time_transport import (
+    ExactTimeTransportError,
+    decode_tt_bits,
+    encode_tt_bits,
+)
 from runtime_enforcement import CERTIFIED_RUNTIME_SCIENTIFIC_COMPONENTS
 from scientific_environment import (
     AUTHORITY_SOLVER_GENERATION,
@@ -119,9 +123,7 @@ REASON_INCOMPATIBLE_OBSERVER = "INCOMPATIBLE_OBSERVER"
 LATITUDE_DOMAIN = (-90.0, 90.0)
 LONGITUDE_DOMAIN = (-180.0, 180.0)
 
-TT_BITS_LENGTH = 16
 _CHECKSUM_BODY_LENGTH = 64
-_HEX_UPPER = frozenset("0123456789ABCDEF")
 _HEX_LOWER = frozenset("0123456789abcdef")
 
 # Unpadded URL-safe Base64 alphabet. Enforced explicitly before decoding so
@@ -253,27 +255,42 @@ def _parse_bound_coordinate(text, field, domain):
 
 
 def _encode_tt_bits(tt):
-    number = _to_float(tt, "tt")
+    """Encode the TT continuation state through the canonical codec.
 
-    if not math.isfinite(number):
-        raise _malformed("tt must be finite, received %r" % (tt,))
+    The IEEE-754 wire encoding of an exact time state is generic, so it is
+    owned by exact_time_transport and not reimplemented here. The cursor
+    keeps everything that is genuinely its own - the payload, the envelope,
+    the checksum, the observer binding and its own failure taxonomy - and
+    the bits it carries are produced by the one implementation the Authority
+    has. Two codecs could drift; one cannot.
 
-    return struct.pack(">d", number).hex().upper()
+    The shared codec has its own transport reason, which is deliberately not
+    the cursor's. A caller of this module is working with a cursor, so a
+    malformed time state is reported as a malformed cursor and the generic
+    reason never leaks through the published cursor API.
+    """
+    try:
+        return encode_tt_bits(tt)
+    except ExactTimeTransportError as error:
+        raise _malformed(str(error)) from error
 
 
 def _decode_tt_bits(value):
-    if len(value) != TT_BITS_LENGTH or not set(value) <= _HEX_UPPER:
-        raise _malformed(
-            "ttBits must be %d uppercase hex characters, received %r"
-            % (TT_BITS_LENGTH, value)
-        )
+    """Decode the TT continuation state through the canonical codec.
 
-    number = struct.unpack(">d", bytes.fromhex(value))[0]
+    The grammar - exactly sixteen uppercase hexadecimal characters denoting
+    a finite binary64 value, with signed zero preserved and no alternate
+    spelling accepted - is the shared codec's, and is the same grammar this
+    module has always enforced.
 
-    if not math.isfinite(number):
-        raise _malformed("ttBits decodes to a non-finite value: %r" % (number,))
-
-    return number
+    As in the encoder, a shared-codec failure is rewrapped as the cursor's
+    own malformed-cursor failure so the published reason taxonomy is
+    unchanged.
+    """
+    try:
+        return decode_tt_bits(value)
+    except ExactTimeTransportError as error:
+        raise _malformed(str(error)) from error
 
 
 def _require_checksum_form(value):
