@@ -23,12 +23,14 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     find_next_sunset_after_utc,
     find_solar_longitude_event_after,
     find_solar_longitude_event_before,
+    find_sunset_bracket,
     find_sunset_successor,
     get_default_kernel_name,
     get_delta_t,
 )
 from astronomical_event_transport import (  # noqa: E402 - gate runs first
     project_astronomical_event,
+    project_sunset_bracket,
     reason_detail,
 )
 from exact_time_transport import (  # noqa: E402 - gate runs first
@@ -498,3 +500,105 @@ def solar_longitude_event_after(ttBits: str, kind: str):
         ) from error
 
     return project_astronomical_event(event)
+
+
+# ---------------------------------------------------------------------------
+# A3c-2 - exact sunset bracket route.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The HTTP surface for the published atomic sunset bracket: the two genuine
+# observer-local sunset boundaries surrounding an exact Terrestrial Time
+# state, with the state they surround.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# The route decodes an exact anchor, hands it and the observer to the
+# published bracket function, and projects whatever comes back. It runs no
+# search, selects no artifact, stitches nothing, and re-derives none of the
+# scientific decisions - the directional frontiers, the artifact selection,
+# the strict ordering, the anchor immobility - which stay where they were
+# certified.
+#
+# TWO PROVENANCES, NOT ONE
+#
+# The bracket's two boundaries are determined independently and may genuinely
+# have been produced under different pinned artifacts when the anchor lies
+# near a coverage boundary. That is preserved: each boundary reports its own
+# kernel, and no bracket-level artifact is invented. The anchor reports none
+# at all, because the caller supplied it and no computation produced it.
+#
+# ABSENCE IS AN ANSWER, NOT A FAILURE
+#
+# At high latitude an instant inside a polar day or polar night is simply not
+# bounded by sunsets within the certified directional horizon. The published
+# function returns that as an absence rather than an error, and it is
+# reported here as 404 - the same treatment /sunset-successor already gives
+# an astronomical absence, and distinct from the 400 that reports a request
+# the Authority refused to answer.
+#
+# TWO FAILURES, KEPT APART
+#
+# A malformed ttBits is a transport failure: the exact state was never
+# received. Anything the bracket function refuses - a malformed anchor, an
+# observer outside the governed geodetic domain, exhausted coverage or
+# exhausted computational reach - reports that function's own stable reason,
+# unchanged. Only those two exception types are caught; an unexpected failure
+# stays visible.
+#
+# ADDITIVE
+#
+# No existing route is touched, and the observer domain, its validation and
+# its stable reason all remain the substrate's.
+# ---------------------------------------------------------------------------
+
+REASON_SUNSET_BRACKET_ABSENT = "SUNSET_BRACKET_ABSENT"
+
+
+@app.get("/sunset-bracket")
+def sunset_bracket(ttBits: str, latitude: float, longitude: float):
+    """Return the sunset boundaries surrounding an exact anchor state.
+
+    ``ttBits`` is the IEEE-754 spelling of the exact binary64 Terrestrial
+    Time anchor. It is arbitrary: it need not be a sunset and need not lie on
+    any particular side of one. ``latitude`` and ``longitude`` are the
+    observer, validated by the published substrate against its own governed
+    geodetic domain and not re-validated or normalized here.
+
+    Returns the exact bracket projection: the anchor, and the two surrounding
+    sunsets each with its own artifact provenance.
+
+    Fails closed with HTTP 400 carrying a stable reason, either for a
+    malformed anchor or for the substrate's own governed refusal. Reports
+    HTTP 404 when the observer genuinely has no sunset boundaries around that
+    instant, which is an astronomical absence rather than a rejected request.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        bracket = find_sunset_bracket(anchor, latitude, longitude)
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    if bracket is None:
+        raise HTTPException(
+            status_code=404,
+            detail=reason_detail(
+                REASON_SUNSET_BRACKET_ABSENT,
+                "SUNSET BRACKET ABSENT - the bound observer has no sunset "
+                "boundaries surrounding the anchor state inside the certified "
+                "directional horizon; the instant is not bracketed by sunsets "
+                "there",
+            ),
+        )
+
+    return project_sunset_bracket(bracket)

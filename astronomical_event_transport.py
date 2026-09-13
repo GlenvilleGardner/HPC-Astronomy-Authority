@@ -126,6 +126,57 @@ def project_astronomical_event(event):
     return projection
 
 
+def project_sunset_event(event):
+    """Return the wire projection of a determined sunset.
+
+    ``event`` is a published SunsetEvent. Its exact state and artifact
+    provenance are carried through unchanged; nothing is recomputed or
+    reinterpreted, and the record itself is not modified.
+
+    ``kernel`` is the pinned NASA/JPL artifact this sunset was actually
+    determined under. It is carried per event rather than per bracket
+    because the two boundaries surrounding one instant may genuinely have
+    been determined under different artifacts, and reporting a single
+    bracket-level artifact would assert provenance the Authority never
+    established.
+
+    This is deliberately the same shape as an astronomical event projection
+    minus the governed kind, because a sunset has no governed kind: it is
+    identified by the observer and the instant, not by a longitude the Sun
+    attains.
+    """
+    projection = project_exact_instant(event.tt)
+    projection["kernel"] = event.kernel
+
+    return projection
+
+
+def project_sunset_bracket(bracket):
+    """Return the wire projection of an atomic sunset bracket.
+
+    ``anchor`` carries no artifact provenance, deliberately. It is the
+    caller's own exact state rather than something the Authority determined,
+    so there is no computation whose artifact could be reported; inventing
+    one - by copying a boundary's kernel, say - would claim provenance for a
+    value the Authority never computed.
+
+    ``previous`` and ``next`` each keep their own. They may legitimately
+    name different artifacts when the anchor lies near a coverage boundary,
+    and that is preserved exactly rather than flattened.
+
+    The observer is absent, exactly as it is from the record. Binding an
+    observer into a transportable record is the continuation witness's
+    responsibility, and repeating it here would create a second, unchecked
+    place where an observer binding could drift from the one that actually
+    governed the search.
+    """
+    return {
+        "anchor": project_exact_instant(bracket.anchor),
+        "previous": project_sunset_event(bracket.previous),
+        "next": project_sunset_event(bracket.next),
+    }
+
+
 def reason_detail(reason, message):
     """Return the structured body of a governed failure.
 
