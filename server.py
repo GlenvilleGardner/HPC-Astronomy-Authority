@@ -13,6 +13,7 @@ from runtime_enforcement import verify_runtime_scientific_components
 verify_runtime_scientific_components()
 
 from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
+    SunsetChronologyError,
     SunsetSuccessorError,
     solar_longitude,
     subsolar_point,
@@ -20,9 +21,19 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     find_season_events,
     find_sunset_utc,
     find_next_sunset_after_utc,
+    find_solar_longitude_event_after,
+    find_solar_longitude_event_before,
     find_sunset_successor,
     get_default_kernel_name,
     get_delta_t,
+)
+from astronomical_event_transport import (  # noqa: E402 - gate runs first
+    project_astronomical_event,
+    reason_detail,
+)
+from exact_time_transport import (  # noqa: E402 - gate runs first
+    ExactTimeTransportError,
+    decode_tt_bits,
 )
 from sunset_cursor import (  # noqa: E402 - deliberate: gate runs first
     LATITUDE_DOMAIN,
@@ -365,3 +376,125 @@ def sunset_successor(cursor: str, latitude: float, longitude: float):
             decoded.longitude,
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# A3c-1 - exact solar-longitude event routes.
+#
+# WHAT THESE ROUTES ADD
+#
+# The first HTTP surface for the exact astronomical substrate. Two questions,
+# already answered by the published solver: which governed solar-longitude
+# crossing is the nearest one strictly before an exact Terrestrial Time state,
+# and which is the nearest one strictly after it.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# Neither route searches, selects an artifact, validates an event kind or
+# decides anything scientific. Each decodes an exact state, hands it to the
+# published solver, and projects whatever comes back. Every scientific
+# decision - the frontier, the artifact, the sampling, the canonical event
+# identity, the strict ordering, the fail-closed taxonomy - stays where it was
+# certified, and none of it is re-derived, re-checked or worked around.
+#
+# THE ANCHOR IS BITS, NOT A DECIMAL
+#
+# The anchor is supplied as ttBits, the IEEE-754 spelling of an exact binary64
+# state. A decimal query parameter would be a different contract: it would
+# invite a client to round, reformat or re-parse the value under its own rule
+# and silently ask about a different instant. There is deliberately no tt
+# parameter, no civil year, no Gregorian date, no ISO instant and no observer
+# - none of those can address an exact astronomical state, and three of them
+# cannot address most of the authoritative domain at all.
+#
+# TWO FAILURES, KEPT APART
+#
+# A malformed ttBits is a TRANSPORT failure: the exact state was never
+# received, so no scientific question was asked and none was refused. It
+# reports the transport reason. A state that WAS received and then refused by
+# the solver reports the solver's own stable reason, unchanged. Collapsing the
+# two would tell a caller that the Authority rejected an instant it never
+# actually had.
+#
+# Only those two exception types are caught. An unexpected failure is not a
+# governed rejection and must stay visible rather than be relabelled as one.
+#
+# NO ABSENCE OUTCOME EXISTS
+#
+# The published solver never returns None: a complete horizon always contains
+# the requested crossing, and a shortened one fails closed with the reason its
+# territory ran out. There is therefore no 404 here and no empty success -
+# every request either yields an event or reports why it could not.
+#
+# ADDITIVE
+#
+# No existing route is touched. The structured detail below is introduced for
+# these two routes only; every published route keeps its own error shape.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/solar-longitude-event-before")
+def solar_longitude_event_before(ttBits: str, kind: str):
+    """Return the nearest governed crossing strictly before an exact state.
+
+    ``ttBits`` is the IEEE-754 spelling of the exact binary64 Terrestrial
+    Time anchor. ``kind`` is one of the governed solar-longitude identities;
+    it is passed to the solver unaltered and is not second-guessed here.
+
+    The anchor is arbitrary: it need not be a crossing, and when it is one it
+    is excluded by the solver's strict ordering.
+
+    Returns the exact event projection. Fails closed with HTTP 400 carrying a
+    stable reason, either for a malformed anchor or for the solver's own
+    governed refusal. There is no 404 and no empty success.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        event = find_solar_longitude_event_before(anchor, kind)
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_astronomical_event(event)
+
+
+@app.get("/solar-longitude-event-after")
+def solar_longitude_event_after(ttBits: str, kind: str):
+    """Return the nearest governed crossing strictly after an exact state.
+
+    The directional mirror of the route above, and identical in every respect
+    except which published solver answers it. The two are written out
+    separately rather than sharing a direction argument, because the scientific
+    API they expose has no direction parameter and neither should its
+    transport.
+
+    Returns the exact event projection. Fails closed with HTTP 400 carrying a
+    stable reason, either for a malformed anchor or for the solver's own
+    governed refusal. There is no 404 and no empty success.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        event = find_solar_longitude_event_after(anchor, kind)
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_astronomical_event(event)
