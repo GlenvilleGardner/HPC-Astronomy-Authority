@@ -2168,3 +2168,462 @@ def geocentric_search_frontier(anchor_tt, horizon_tt):
         "computation cannot be evaluated from the anchor state TT %r onward, "
         "and the anchor is not moved" % (frontier_lo, frontier_hi, anchor),
     )
+
+
+# ---------------------------------------------------------------------------
+# A3b-ii - strict solar-longitude directional solver.
+#
+# WHAT THIS OPERATION ADDS
+#
+# Two astronomical questions: which governed solar-longitude crossing is the
+# nearest one strictly before an arbitrary exact Terrestrial Time anchor, and
+# which is the nearest one strictly after it. Nothing else. No route is
+# served, no transport representation is formed and no calendar meaning is
+# assigned; each of those is a separate governed operation.
+#
+# WHAT IT DELEGATES
+#
+# Which pinned NASA/JPL artifact may answer, and over exactly what interval,
+# is not decided here. A3b-ii asks A3b-i for a directional geocentric
+# frontier and searches inside exactly what it is given, under exactly the
+# artifact it names. Declared certified coverage, computation evaluability,
+# governed precedence, anchor immobility and the contiguity of the examined
+# territory are all owned by that substrate. None of it is re-derived,
+# re-checked against a second artifact, or worked around.
+#
+# CANONICAL EVENT IDENTITY
+#
+# The authoritative Terrestrial Time of a governed crossing is the LEAST
+# REPRESENTABLE binary64 TT at which the governed quadrant predicate has
+# transitioned into the requested quadrant. It is not the value the certified
+# root finder happens to return.
+#
+# That distinction is load-bearing rather than cosmetic. find_discrete reports
+# the upper end of whatever bracket it converged on, and that end depends on
+# the bracket: across the entire pinned authoritative domain, 85.1% of
+# reported endpoints differ from the predicate's actual binary64 boundary, by
+# up to 4.66e-09 TT days. Two searches that reach the same physical crossing
+# from different directions can therefore report two different numbers, and a
+# strict comparison against one of them is a comparison against an accident of
+# the search grid.
+#
+# The canonical boundary has no such freedom. It is a property of the
+# predicate and the artifact alone, so every bracket containing a crossing
+# resolves it to the same bits. That is what makes the strict ordering below
+# mean what it says, and it is why no cross-bracket identity tolerance is
+# needed or permitted here.
+#
+# STRICT ORDERING
+#
+# A crossing qualifies only when its canonical binary64 TT is strictly less
+# than the anchor, or strictly greater than it. One comparison decides it.
+# There is no epsilon, no tolerance, no minimum gap, no event-identity rule,
+# no nearest-event heuristic and no nominal-year arithmetic.
+#
+# AN ANCHOR THAT IS ITSELF A CROSSING
+#
+# Both directions exclude it, and in both directions that is structural rather
+# than a special case in the code.
+#
+# Forward, the predicate at a canonical crossing already carries the quadrant
+# that crossing transitions INTO, so it presents no change of value inside a
+# frontier beginning there and cannot be rediscovered at all.
+#
+# Backward, the frontier ends at the anchor, so the crossing IS inside it and
+# IS rediscovered - as exactly the anchor. The certified root finder returns an
+# endpoint at which the predicate already carries the requested quadrant, so
+# that endpoint cannot lie below the least state carrying it; and every state
+# the search may report lies at or below the frontier's upper bound, which is
+# the anchor. The two bounds meet, the strict comparison excludes it, and the
+# previous same-kind crossing is returned.
+#
+# THE HORIZON IS CERTIFIED, NOT ASSUMED
+#
+# SOLAR_LONGITUDE_SEARCH_SPAN_DAYS exceeds the largest gap between consecutive
+# same-kind crossings anywhere in the pinned authoritative domain, so a
+# complete frontier always contains one. A complete frontier that contains
+# none contradicts that certification and fails closed. It is never reported
+# as an absence of event, and neither direction ever returns None.
+#
+# ABSENCE IS NOT EXHAUSTION
+#
+# A crossing found inside a frontier that stopped short IS a complete answer
+# to the nearest-event question: the anchor is never moved, the examined
+# territory is contiguous from it, and truncation removes only territory
+# FARTHER from the anchor than the crossing that was found. A frontier that
+# stopped short and contained no crossing is not an answer at all, and raises
+# the reason its territory ran out.
+# ---------------------------------------------------------------------------
+
+REASON_EVENT_KIND_INVALID = "EVENT_KIND_INVALID"
+REASON_SOLAR_LONGITUDE_EVENT_UNRESOLVED = "SOLAR_LONGITUDE_EVENT_UNRESOLVED"
+
+# The governed directional reach of one search, in Terrestrial Time days.
+#
+# It is a search horizon and nothing else: not a year length, not a calendar
+# quantity, not a Gregorian span, not an event-time approximation. It is
+# certified to exceed the largest consecutive same-kind gap measured across
+# the entire pinned authoritative domain.
+SOLAR_LONGITUDE_SEARCH_SPAN_DAYS = 380.0
+
+# The governed bound on the certified root finder's INITIAL sampling grid, in
+# Terrestrial Time days.
+#
+# find_discrete derives that grid from the predicate's step_days and the width
+# of the interval it is handed, and the derivation is a sawtooth: a frontier
+# shortened by exhausted coverage or reach can land on a spacing wider than
+# the closest approach of two adjacent crossings, at which point the initial
+# scan is no longer guaranteed to separate them. Bounding the step bounds the
+# spacing for EVERY interval width, because the derived spacing never exceeds
+# the step.
+#
+# The value is the certified minimum adjacent-quadrant gap reduced to whole
+# Terrestrial Time days. The certified minimum itself is deliberately NOT
+# used: its observed binary64 margin is smaller than the precision to which
+# that certification value is recorded, and a margin that thin is not a
+# margin.
+#
+# It governs enumeration completeness only, and is never event-time authority.
+# Canonical identity is independent of it, which is precisely why it may be
+# chosen on sampling grounds alone.
+SOLAR_LONGITUDE_SAMPLE_STEP_DAYS = 88.0
+
+# The four governed identities, in Skyfield quadrant order. The mapping from
+# quadrant to identity IS this ordering, so there is no second table that can
+# drift out of step with it.
+GOVERNED_SOLAR_LONGITUDE_KINDS = (
+    SOLAR_LONGITUDE_000,
+    SOLAR_LONGITUDE_090,
+    SOLAR_LONGITUDE_180,
+    SOLAR_LONGITUDE_270,
+)
+
+
+def _governed_solar_longitude_quadrant(kind):
+    """Return the Skyfield quadrant for a governed solar-longitude identity.
+
+    Only the four frozen identities are accepted, compared by exact string
+    equality. There is no alias, no case folding, no whitespace stripping and
+    no numeric-degree form: 0, 90, 0.0, "000" and "Spring" are all invalid,
+    because a scientific layer that accepts several spellings of one identity
+    cannot report which one was actually asked for.
+
+    A value that is not a string cannot equal any governed identity and would
+    fail through to the same closed failure regardless. The explicit type test
+    states that intent rather than leaving it to a coincidence of Python's
+    equality rules.
+
+    Validation happens before any artifact is opened, so an invalid kind never
+    costs an ephemeris read and never surfaces as a coverage failure.
+    """
+    if isinstance(kind, str):
+        for quadrant, governed in enumerate(GOVERNED_SOLAR_LONGITUDE_KINDS):
+            if kind == governed:
+                return quadrant
+
+    raise SunsetChronologyError(
+        REASON_EVENT_KIND_INVALID,
+        "SOLAR LONGITUDE EVENT KIND INVALID - kind must be exactly one of "
+        "%s, received %r" % (list(GOVERNED_SOLAR_LONGITUDE_KINDS), kind),
+    )
+
+
+def _sampling_controlled_seasons(kernel_name):
+    """Return the governed predicate and a sampling-bounded view of it.
+
+    The astronomical computation is almanac.seasons over the named pinned
+    artifact, exactly the callable A3b-i admitted. The wrapper delegates to it
+    and returns its value unchanged: no alternate model, no approximation and
+    no second astronomical path is introduced.
+
+    The ONLY thing the wrapper changes is the step_days attribute the
+    certified root finder reads in order to size its initial grid. That
+    attribute is sampling metadata - find_discrete consults it to decide how
+    many points to lay down and for nothing else - so bounding it bounds the
+    grid without touching the astronomy.
+
+    Both objects are returned because they are used for different purposes and
+    must not be confused. The wrapper bounds the SEARCH. The underlying
+    predicate is what canonicalization interrogates, so the authoritative
+    instant is always read from the governed computation itself rather than
+    from anything this function constructed.
+    """
+    season_at = almanac.seasons(load_kernel(kernel_name))
+
+    def sampled_season_at(t):
+        return season_at(t)
+
+    sampled_season_at.step_days = SOLAR_LONGITUDE_SAMPLE_STEP_DAYS
+
+    return sampled_season_at, season_at
+
+
+def _canonical_quadrant_boundary(season_at, tt_below, tt_at_or_above, quadrant):
+    """Return the least representable TT whose quadrant is ``quadrant``.
+
+    PRECONDITION, required of every caller:
+
+        tt_below < tt_at_or_above
+        season_at(tt_below)       != quadrant
+        season_at(tt_at_or_above) == quadrant
+
+    with exactly one transition between them. Every call site establishes this
+    from the certified root finder's own ascending report rather than assuming
+    it.
+
+    The boundary is located by interrogating the actual governed predicate,
+    halving the interval until no representable binary64 value lies strictly
+    between the two ends. Termination is exhaustion of the representation
+    itself: there is no epsilon, no tolerance, no convergence threshold, no
+    iteration limit and no second-count, because once no representable state
+    remains between them there is nothing left to examine.
+
+    The result is exact rather than approximate. The returned state carries
+    the requested quadrant and its immediate binary64 predecessor does not, so
+    the answer does not depend on how wide the starting interval was, and two
+    callers holding different brackets obtain the same bits.
+
+    This is deliberately NOT _first_evaluable_state and must not be merged
+    with it. That helper locates where a computation can be EVALUATED at all,
+    by observing whether the certified machinery raises; this one locates
+    where a computation's VALUE changes, with every probe succeeding. They
+    answer different scientific questions and share only the arithmetic of
+    bisection, so unifying them would make an error signal and an
+    astronomical value interchangeable.
+
+    Soundness rests on the transition being a clean step at binary64
+    resolution. That is a certified property of the pinned artifacts and the
+    certified runtime rather than a timeless one, so it is verified rather
+    than assumed.
+    """
+    below = tt_below
+    at_or_above = tt_at_or_above
+
+    while True:
+        mid = below + (at_or_above - below) / 2.0
+
+        if mid == below or mid == at_or_above:
+            return at_or_above
+
+        if int(season_at(ts.tt_jd(mid))) == quadrant:
+            at_or_above = mid
+        else:
+            below = mid
+
+
+def _solar_longitude_crossings(frontier, quadrant):
+    """Return the canonical TT of every requested crossing inside a frontier.
+
+    Exactly one search is performed, over exactly the interval A3b-i returned,
+    under exactly the artifact it named. There is no second bracket, no
+    subdivision, no resumption, no stitching and no retry under another
+    artifact: any of those would answer a different question than the one the
+    frontier certified.
+
+    The search runs against the sampling-bounded view, so the initial grid is
+    finer than the closest approach of two adjacent crossings for ANY frontier
+    width. Every crossing inside the frontier therefore falls in a sample
+    interval of its own and is enumerated exactly once. Each reported crossing
+    is then canonicalized against the governed predicate itself.
+
+    The lower bound handed to canonicalization is the immediately preceding
+    reported crossing, or the frontier's own lower bound for the first one.
+    That bound is structural rather than chosen: consecutive crossings carry
+    consecutive quadrants, so the preceding crossing never carries the
+    requested one, and a first reported crossing that carries it proves the
+    frontier's lower bound does not. The bisection therefore always begins
+    from a state of a different quadrant, and never reaches outside the
+    frontier or into a second artifact.
+
+    Results ascend in Terrestrial Time, because the certified root finder
+    reports in ascending time and canonicalization moves each value only
+    within its own bracket.
+
+    ONE GOVERNED PROTECTION BOUNDARY
+
+    Enumeration and canonicalization interrogate the same governed predicate
+    over the same certified territory, and they are one scientific operation
+    rather than two: a canonical boundary is meaningless without the crossing
+    that bracketed it, and a crossing is not an answer until it has been
+    canonicalized. They are therefore protected together, by a single handler
+    around the whole operation, so an exhausted computational reach is
+    translated into a governed failure exactly once no matter which half of
+    the operation met it. A raw ephemeris range error never escapes this API.
+
+    The frontier was admitted by probing this same computation at both of its
+    endpoints, and canonicalization never leaves the bracket between two
+    reported crossings, so a failure in here is not expected. If one occurs
+    the examined territory is no longer whole, and the only honest response is
+    to fail closed: the frontier is never abandoned for another artifact,
+    never resumed past the failure, never retried and never stitched to a
+    second interval, because any of those would answer a different question.
+
+    Only EphemerisRangeError is caught. It is the certified machinery
+    reporting that a required record lies outside the published coefficients,
+    which is a statement about exhausted reach. Any other failure is not such
+    a statement and must propagate unchanged rather than be reported as one.
+    """
+    sampled_season_at, season_at = _sampling_controlled_seasons(
+        frontier.kernel
+    )
+
+    crossings = []
+    below = frontier.tt_lo
+
+    try:
+        times, events = almanac.find_discrete(
+            ts.tt_jd(frontier.tt_lo),
+            ts.tt_jd(frontier.tt_hi),
+            sampled_season_at,
+        )
+
+        for t, reported in zip(times, events):
+            crossing_tt = float(t.tt)
+
+            if int(reported) == quadrant:
+                crossings.append(
+                    _canonical_quadrant_boundary(
+                        season_at, below, crossing_tt, quadrant
+                    )
+                )
+
+            below = crossing_tt
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the geocentric solar-longitude "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s while enumerating or canonicalizing its crossings; the "
+            "examined territory is not whole, so no event is reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    return tuple(crossings)
+
+
+def find_solar_longitude_event_before(tt, kind):
+    """Return the nearest governed crossing strictly before an anchor.
+
+    ``tt`` is an exact binary64 Terrestrial Time state. It is arbitrary: it
+    need not be a crossing, and when it IS one it is excluded by the strict
+    ordering, so the crossing before it is returned.
+
+    ``kind`` is one of the four governed solar-longitude identities.
+
+    Returns an AstronomicalEvent whose tt is the canonical binary64 boundary
+    of the crossing, whose kind is the requested identity, and whose kernel is
+    the pinned NASA/JPL artifact the search actually ran under.
+
+    NEVER returns None. Either a crossing is determined or the operation fails
+    closed, because there is no state of the authoritative data in which a
+    fully supported horizon legitimately contains no crossing.
+
+    Fails closed, preserving the substrate's own stable reason, when the
+    anchor state is malformed, the event kind is not governed, or
+    authoritative coverage or computational reach ends before the horizon
+    without a qualifying crossing having been found first.
+
+    No observer is accepted, no civil year participates, and no HTTP semantics
+    are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+    quadrant = _governed_solar_longitude_quadrant(kind)
+
+    frontier = geocentric_search_frontier(
+        anchor, anchor - SOLAR_LONGITUDE_SEARCH_SPAN_DAYS
+    )
+
+    latest = None
+
+    for crossing_tt in _solar_longitude_crossings(frontier, quadrant):
+        if crossing_tt < anchor:
+            latest = crossing_tt
+
+    if latest is not None:
+        return AstronomicalEvent(
+            tt=latest, kind=kind, kernel=frontier.kernel
+        )
+
+    if frontier.complete:
+        raise SunsetChronologyError(
+            REASON_SOLAR_LONGITUDE_EVENT_UNRESOLVED,
+            "SOLAR LONGITUDE EVENT UNRESOLVED - the complete supported "
+            "frontier TT %r .. %r under %s contains no %s crossing strictly "
+            "before the anchor state TT %r. The governed search horizon "
+            "exceeds the certified maximum gap between consecutive same-kind "
+            "crossings, so this contradicts the published certification and "
+            "no event is reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel, kind, anchor),
+        )
+
+    raise SunsetChronologyError(
+        frontier.truncation_reason,
+        "SOLAR LONGITUDE PREDECESSOR UNRESOLVED - no %s crossing lies "
+        "strictly before the anchor state TT %r inside the supported frontier "
+        "TT %r .. %r, and that frontier stopped short of the requested "
+        "horizon, so the absence of a crossing is not established"
+        % (kind, anchor, frontier.tt_lo, frontier.tt_hi),
+    )
+
+
+def find_solar_longitude_event_after(tt, kind):
+    """Return the nearest governed crossing strictly after an anchor.
+
+    ``tt`` is an exact binary64 Terrestrial Time state. It is arbitrary: it
+    need not be a crossing, and when it IS one it is excluded, so the crossing
+    after it is returned. That exclusion is structural here rather than merely
+    ordered: the predicate at a canonical crossing already carries the
+    quadrant it transitions into, so the crossing presents no change of value
+    inside a frontier that begins at it and cannot be rediscovered.
+
+    ``kind`` is one of the four governed solar-longitude identities.
+
+    Returns an AstronomicalEvent whose tt is the canonical binary64 boundary
+    of the crossing, whose kind is the requested identity, and whose kernel is
+    the pinned NASA/JPL artifact the search actually ran under.
+
+    NEVER returns None. Either a crossing is determined or the operation fails
+    closed, because there is no state of the authoritative data in which a
+    fully supported horizon legitimately contains no crossing.
+
+    Fails closed, preserving the substrate's own stable reason, when the
+    anchor state is malformed, the event kind is not governed, or
+    authoritative coverage or computational reach ends before the horizon
+    without a qualifying crossing having been found first.
+
+    No observer is accepted, no civil year participates, and no HTTP semantics
+    are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+    quadrant = _governed_solar_longitude_quadrant(kind)
+
+    frontier = geocentric_search_frontier(
+        anchor, anchor + SOLAR_LONGITUDE_SEARCH_SPAN_DAYS
+    )
+
+    for crossing_tt in _solar_longitude_crossings(frontier, quadrant):
+        if crossing_tt > anchor:
+            return AstronomicalEvent(
+                tt=crossing_tt, kind=kind, kernel=frontier.kernel
+            )
+
+    if frontier.complete:
+        raise SunsetChronologyError(
+            REASON_SOLAR_LONGITUDE_EVENT_UNRESOLVED,
+            "SOLAR LONGITUDE EVENT UNRESOLVED - the complete supported "
+            "frontier TT %r .. %r under %s contains no %s crossing strictly "
+            "after the anchor state TT %r. The governed search horizon "
+            "exceeds the certified maximum gap between consecutive same-kind "
+            "crossings, so this contradicts the published certification and "
+            "no event is reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel, kind, anchor),
+        )
+
+    raise SunsetChronologyError(
+        frontier.truncation_reason,
+        "SOLAR LONGITUDE SUCCESSOR UNRESOLVED - no %s crossing lies strictly "
+        "after the anchor state TT %r inside the supported frontier TT %r .. "
+        "%r, and that frontier stopped short of the requested horizon, so the "
+        "absence of a crossing is not established"
+        % (kind, anchor, frontier.tt_lo, frontier.tt_hi),
+    )
