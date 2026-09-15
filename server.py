@@ -25,6 +25,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     find_solar_longitude_event_before,
     find_solar_longitude_event_in_year,
     find_sunset_bracket,
+    find_sunset_from_instant,
     find_sunset_successor,
     get_default_kernel_name,
     get_delta_t,
@@ -32,6 +33,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
 from astronomical_event_transport import (  # noqa: E402 - gate runs first
     project_astronomical_event,
     project_sunset_bracket,
+    project_sunset_event,
     reason_detail,
 )
 from exact_time_transport import (  # noqa: E402 - gate runs first
@@ -699,3 +701,157 @@ def solar_longitude_event_in_year(year: int, kind: str):
         ) from error
 
     return project_astronomical_event(event)
+
+
+# ---------------------------------------------------------------------------
+# A3c-4 - exact sunset successor route.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The HTTP surface for one published directional question: which genuine
+# observer-local sunset is the earliest one strictly later than an exact
+# Terrestrial Time state.
+#
+# It is the continuation primitive the exact layer was missing. Every other
+# way to continue a sunset sequence across this Authority either resumes from
+# a rendered timestamp or from an opaque witness; this one resumes from the
+# exact state itself, so a consumer walking a sequence never leaves exact
+# scientific state and never has to hold anything else.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# The route decodes an exact anchor, hands it and the observer to the
+# published directional solver, and projects whatever comes back. It runs no
+# search, selects no artifact, stitches nothing, and re-derives none of the
+# scientific decisions - the supported frontier, the artifact selection, the
+# strict binary64 ordering, the anchor immobility - which stay where they
+# were certified.
+#
+# Exactly one directional search is performed. The atomic bracket is
+# deliberately NOT used: it determines a preceding boundary as well, and a
+# caller asking which sunset comes next has not asked for that one. Answering
+# a narrower question with a wider computation would discard half of every
+# result and would make a sequence walk cost twice what the question does.
+#
+# STRICTLY LATER, AND NOTHING ELSE
+#
+# The contract is the earliest genuine sunset STRICTLY AFTER the supplied
+# state. It is not the nearest sunset, not the sunset whose day contains the
+# instant, and not the sunset falling on any civil date. An anchor that is
+# itself a determined sunset root is not special-cased: the published solver
+# excludes it by strict ordering, and the certification establishes that the
+# result is the FOLLOWING physical sunset from crossing topology rather than
+# from any comparison between two determined roots.
+#
+# THE ANCHOR IS BITS, NOT A DECIMAL
+#
+# The anchor is supplied as ttBits, the IEEE-754 spelling of an exact
+# binary64 state. A decimal query parameter would be a different contract: it
+# would invite a client to round, reformat or re-parse the value under its
+# own rule and silently ask about a different instant. There is deliberately
+# no tt parameter, no UTC, no civil date, no civil year, no kernel selector,
+# no direction control and no continuation witness.
+#
+# The anchor is not returned. The atomic bracket returns its anchor because
+# the claim it makes - previous < anchor < next - is only checkable with it;
+# a single directional result makes no such claim, so echoing the caller's
+# own input back would add a field nothing reads.
+#
+# TWO FAILURES, KEPT APART
+#
+# A malformed ttBits is a TRANSPORT failure: the exact state was never
+# received, so no scientific question was asked and none was refused. It
+# reports the transport reason. A state that WAS received and then refused by
+# the substrate - a malformed instant, an observer outside the governed
+# geodetic domain, exhausted coverage or exhausted computational reach -
+# reports the substrate's own stable reason, unchanged.
+#
+# Only those two exception types are caught. An unexpected failure is not a
+# governed rejection and must stay visible rather than be relabelled as one.
+#
+# ABSENCE IS AN ANSWER, NOT A FAILURE
+#
+# At high latitude an instant inside a polar day or polar night is simply not
+# followed by a sunset within the certified directional horizon. The
+# published solver returns that as an absence rather than an error, and only
+# when the examined frontier was complete, so it can never be confused with
+# territory that ran out. It is reported here as 404 - the same treatment
+# /sunset-successor and /sunset-bracket already give an astronomical absence,
+# and distinct from the 400 that reports a request the Authority refused to
+# answer.
+#
+# SCIENTIFIC ENVIRONMENT
+#
+# This route is stateless, exactly as the rest of the exact layer is. It
+# carries no environment fingerprint, because the certified runtime is
+# verified once at startup before any astronomy is loaded, and a request
+# answered by this process is answered under that verified runtime.
+#
+# A consumer performing a MULTI-REQUEST walk across a restart or redeploy is
+# a different matter: consistency of the scientific environment across that
+# walk is a deployment-provenance concern and is NOT established by this
+# route or by any other route in the exact layer. It must be addressed before
+# final production acceptance. It is deliberately not addressed here, because
+# a per-response generation field would change a published projection shape
+# to carry a property that belongs to the deployment rather than to the
+# event.
+#
+# ADDITIVE
+#
+# No existing route is touched, and the observer domain, its validation and
+# its stable reason all remain the substrate's.
+# ---------------------------------------------------------------------------
+
+REASON_SUNSET_EVENT_ABSENT = "SUNSET_EVENT_ABSENT"
+
+
+@app.get("/sunset-event-after")
+def sunset_event_after(ttBits: str, latitude: float, longitude: float):
+    """Return the earliest genuine sunset strictly after an exact state.
+
+    ``ttBits`` is the IEEE-754 spelling of the exact binary64 Terrestrial
+    Time anchor. It is arbitrary: it need not be a sunset and need not lie on
+    any particular side of one. ``latitude`` and ``longitude`` are the
+    observer, validated by the published substrate against its own governed
+    geodetic domain and not re-validated or normalized here.
+
+    Returns the exact sunset projection: the state of the crossing and the
+    artifact provenance of the search that determined it. ``utc`` is
+    reference information and is null wherever the instant lies outside the
+    span a calendar datetime can express.
+
+    Fails closed with HTTP 400 carrying a stable reason, either for a
+    malformed anchor or for the substrate's own governed refusal. Reports
+    HTTP 404 when the observer genuinely has no sunset after that instant
+    inside the certified directional horizon, which is an astronomical
+    absence rather than a rejected request.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        event = find_sunset_from_instant(anchor, latitude, longitude)
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    if event is None:
+        raise HTTPException(
+            status_code=404,
+            detail=reason_detail(
+                REASON_SUNSET_EVENT_ABSENT,
+                "SUNSET EVENT ABSENT - the supplied observer has no sunset "
+                "strictly after the anchor state inside the certified "
+                "directional horizon; the instant is not followed by a "
+                "sunset there",
+            ),
+        )
+
+    return project_sunset_event(event)

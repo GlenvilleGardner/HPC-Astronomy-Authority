@@ -1271,6 +1271,18 @@ class TestExistingContractsUnchanged(unittest.TestCase):
         {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
     )
 
+    # Application routes added by governed increments AFTER A3c-3.
+    #
+    # A3c-3's closed-world claim is about the surface AS OF A3c-3: that this
+    # increment added exactly one route. A later additive increment does not
+    # weaken that claim, but it does make an unqualified count of the whole
+    # application factually wrong. Subtracting the later additions keeps the
+    # claim exactly as strong as it was while letting it stay true.
+    #
+    # Each entry is owned by the increment that added it, and its own suite
+    # owns the closed world as of that increment.
+    POST_A3C3_ROUTES = frozenset({"/sunset-event-after"})
+
     def test_every_preexisting_route_is_registered_unchanged(self):
         found = registered_routes()
         for path, name, parameters in (
@@ -1284,7 +1296,8 @@ class TestExistingContractsUnchanged(unittest.TestCase):
                 self.assertEqual(endpoint_parameters, parameters)
 
     def test_a3c3_added_exactly_one_application_route(self):
-        found = set(registered_routes()) - self.FRAMEWORK_ROUTES
+        found = (set(registered_routes()) - self.FRAMEWORK_ROUTES
+                 - self.POST_A3C3_ROUTES)
         expected = {
             path for path, _n, _p in
             self.LEGACY_ROUTES + self.A3C1_ROUTES + self.A3C2_ROUTES

@@ -161,7 +161,10 @@ A3C2_BLOCK_MARKER = "# A3c-2 - exact sunset bracket route."
 #
 # Each entry is owned by the increment that added it, and its own suite owns
 # the closed world as of that increment.
-POST_A3C2_ROUTES = frozenset({"/solar-longitude-event-in-year"})
+POST_A3C2_ROUTES = frozenset({
+    "/solar-longitude-event-in-year",
+    "/sunset-event-after",
+})
 
 
 # --- Independent helpers ---------------------------------------------------

@@ -156,18 +156,56 @@ def oracle_sunsets(kernel_name, tt_lo, tt_hi, latitude, longitude):
     ]
 
 
-def oracle_successor(anchor, latitude, longitude):
-    """The expected answer, derived without the unit under test."""
-    frontier = frontier_for(anchor, latitude, longitude)
-    qualifying = [
-        tt
-        for tt in oracle_sunsets(
-            frontier.kernel, frontier.tt_lo, frontier.tt_hi,
-            latitude, longitude,
-        )
-        if tt > anchor
+def oracle_transitions(kernel_name, tt_lo, tt_hi, latitude, longitude):
+    """Independent enumeration of every sunrise/sunset transition.
+
+    Returns (tt, sun_is_up) pairs in ascending time. Used to examine the
+    CROSSING TOPOLOGY of an interval rather than the value of any root.
+    """
+    times, events = almanac.find_discrete(
+        ts.tt_jd(tt_lo),
+        ts.tt_jd(tt_hi),
+        predicate(kernel_name, latitude, longitude),
+    )
+    return [
+        (float(t.tt), bool(sun_is_up))
+        for t, sun_is_up in zip(times, events)
     ]
-    return (qualifying[0] if qualifying else None), frontier
+
+
+def oracle_successor(anchor, latitude, longitude):
+    """The expected answer, derived without the unit under test.
+
+    WHY THERE IS NO `tt > anchor` FILTER HERE
+
+    There used to be one, and it made this oracle circular with respect to
+    the single question that matters most. The production operation selects
+    by `event_tt > anchor`. An oracle applying that same predicate to the
+    same enumeration agrees with the operation by construction: if the
+    anchor's OWN crossing were ever re-reported at a value fractionally
+    above the anchor, the operation would return it and this oracle would
+    expect it, and the suite would report success.
+
+    A forward frontier begins exactly at the anchor - `supported_search_
+    frontier` never moves the anchor side - so the enumeration already
+    covers precisely the territory in question, and the FIRST sunset it
+    reports is the answer without any predicate being applied to it.
+
+    That is a strictly stronger oracle. For an arbitrary anchor it names the
+    same event as before. For an anchor that is itself a sunset root it
+    names the FOLLOWING physical sunset, and it would name the re-reported
+    anchor instead if the substrate ever produced one - which is exactly the
+    failure this file must be able to detect and previously could not.
+
+    No ordering predicate, no epsilon, no tolerance and no comparison
+    between two independently solved roots appears here.
+    """
+    frontier = frontier_for(anchor, latitude, longitude)
+    enumerated = oracle_sunsets(
+        frontier.kernel, frontier.tt_lo, frontier.tt_hi,
+        latitude, longitude,
+    )
+    return (enumerated[0] if enumerated else None), frontier
 
 
 def ceiling_anchor(offset_days):
@@ -324,6 +362,167 @@ class TestStrictSuccessor(SuccessorAssertions):
         )
         with self.assertRaises(Exception):
             event.tt = 0.0
+
+
+# --- 1b. Same-root continuation -------------------------------------------
+
+
+class TestSameRootContinuation(SuccessorAssertions):
+    """The published contract is EARLIEST sunset strictly after the anchor.
+
+    Strict binary64 ordering makes the result later than the anchor. It does
+    not, on its own, establish that the result is the FOLLOWING PHYSICAL
+    sunset rather than a numerical re-report of the anchor's own crossing:
+    a re-report landing fractionally above the anchor would satisfy `>` and
+    would be returned.
+
+    This class closes that gap structurally.
+
+    THE MECHANISM, NOT A MEASUREMENT OF THE SYMPTOM
+
+    A determined root lies on the post-transition side of its own crossing:
+    the Sun is already down there. find_discrete reports only points at
+    which the sampled predicate CHANGES value, so a search whose interval
+    begins at such a state presents no sign change at the originating
+    crossing and cannot rediscover it. The exclusion is a consequence of
+    where the root sits, not of any distance between two instants.
+
+    HOW "THE FOLLOWING SUNSET" IS ESTABLISHED
+
+    By crossing topology, never by comparing root values. Sunrises and
+    sunsets strictly alternate, so between any two consecutive sunsets there
+    is exactly one sunrise. Counting the sunrises in the interval the
+    operation spanned is therefore decisive:
+
+        0 sunrises   the interval lies inside one night, so the result is a
+                     re-report of the anchor's own crossing
+        2 or more    more than one day boundary was crossed, so at least one
+                     sunset was skipped
+        exactly 1    exactly one night ended: the result is the next sunset
+
+    The production result appears only as an interval ENDPOINT. Its value is
+    never asserted equal to anything, and no enumeration is filtered by an
+    ordering predicate against it, so the argument holds unchanged whether
+    or not two determinations of one crossing agree bit for bit.
+
+    WHAT IS DELIBERATELY NOT ASSERTED
+
+    No epsilon, tolerance or minimum gap appears. No two independently
+    determined roots are compared for equality or inequality anywhere in
+    this class.
+
+    In particular: asserting that the anchor is ABSENT from an independently
+    enumerated crossing set is an absence/membership claim about that one
+    enumeration. It is NOT a requirement that two independently solved
+    representations of the same event compare bit-identically, and it must
+    never be rewritten as a cross-solver assertNotEqual. Differently
+    bracketed searches legitimately report the same physical crossing at
+    slightly different binary64 values, and under different artifacts;
+    requiring them to agree - or to disagree - bit for bit would encode
+    exactly the cross-bracket event-identity rule this file refuses.
+    """
+
+    def determined_roots(self, latitude, longitude, count=3):
+        """Consecutive roots produced by the unit, for inspection."""
+        roots = []
+        anchor = INTERIOR_TT
+        for _ in range(count):
+            event = find_sunset_from_instant(anchor, latitude, longitude)
+            if event is None:
+                return roots
+            roots.append(event)
+            anchor = event.tt
+        return roots
+
+    def test_every_determined_root_is_post_transition(self):
+        """MEASURED, under each event's OWN reported kernel.
+
+        This is the load-bearing structural fact. If a determined root ever
+        sat on the sun-up side, a forward search beginning there would see a
+        sign change at that very crossing and could return it again.
+        """
+        for latitude, longitude, label in OBSERVERS:
+            for event in self.determined_roots(latitude, longitude):
+                with self.subTest(observer=label, tt=event.tt):
+                    sun_is_up = predicate(event.kernel, latitude, longitude)
+                    self.assertFalse(
+                        bool(sun_is_up(ts.tt_jd(event.tt))),
+                        "a determined sunset root must lie on the sun-down "
+                        "side of its own crossing",
+                    )
+
+    def test_an_exact_root_anchor_is_absent_from_its_own_frontier(self):
+        """The originating crossing is not reported at all, independently.
+
+        The enumeration is performed here with skyfield.almanac over exactly
+        the frontier the successor call is bound to. This is membership, not
+        equality between two solved roots.
+        """
+        for latitude, longitude, label in OBSERVERS:
+            for event in self.determined_roots(latitude, longitude, count=2):
+                with self.subTest(observer=label, tt=event.tt):
+                    frontier = frontier_for(event.tt, latitude, longitude)
+                    enumerated = oracle_sunsets(
+                        frontier.kernel, frontier.tt_lo, frontier.tt_hi,
+                        latitude, longitude,
+                    )
+                    self.assertNotIn(event.tt, enumerated)
+
+    def test_an_exact_root_anchor_yields_the_following_physical_sunset(self):
+        """Exactly one night ends between the anchor and the result.
+
+        The interval spanned by the operation is examined for the crossings
+        it contains. Exactly one sunrise proves that one night ended, so the
+        result is neither a re-report of the anchor's own crossing - which
+        would leave the interval inside a single night - nor a sunset
+        reached by skipping one, which would end two nights or more.
+
+        The only sunset the interval may contain is the result's own
+        crossing at its upper endpoint.
+
+        No root value is compared against any other.
+        """
+        for latitude, longitude, label in OBSERVERS:
+            for event in self.determined_roots(latitude, longitude, count=2):
+                with self.subTest(observer=label, tt=event.tt):
+                    result = find_sunset_from_instant(
+                        event.tt, latitude, longitude
+                    )
+                    self.assertIsNotNone(result)
+                    self.assertGreater(result.tt, event.tt)
+
+                    spanned = oracle_transitions(
+                        result.kernel, event.tt, result.tt,
+                        latitude, longitude,
+                    )
+                    sunrises = [tt for tt, up in spanned if up]
+                    sunsets = [tt for tt, up in spanned if not up]
+
+                    self.assertEqual(
+                        len(sunrises), 1,
+                        "exactly one night must end between an exact-root "
+                        "anchor and the sunset reported after it",
+                    )
+                    self.assertLessEqual(
+                        len(sunsets), 1,
+                        "the only sunset the spanned interval may contain is "
+                        "the result's own crossing at its upper endpoint",
+                    )
+
+    def test_continuation_composes_without_special_casing(self):
+        """Each result is itself a valid anchor for the next call.
+
+        Ordinal only. Successive results ascend and are distinct; nothing
+        asserts how far apart they are.
+        """
+        for latitude, longitude, label in OBSERVERS:
+            with self.subTest(observer=label):
+                roots = [e.tt for e in self.determined_roots(
+                    latitude, longitude, count=5
+                )]
+                self.assertEqual(len(roots), 5)
+                self.assertEqual(roots, sorted(roots))
+                self.assertEqual(len(set(roots)), 5)
 
 
 # --- 2. Composition with published A2-3b -----------------------------------
