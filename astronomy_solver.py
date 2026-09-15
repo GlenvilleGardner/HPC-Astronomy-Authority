@@ -2627,3 +2627,252 @@ def find_solar_longitude_event_after(tt, kind):
         "absence of a crossing is not established"
         % (kind, anchor, frontier.tt_lo, frontier.tt_hi),
     )
+
+
+# ---------------------------------------------------------------------------
+# A3c-3 - year-addressed exact solar-longitude event.
+#
+# WHAT THIS OPERATION ADDS
+#
+# One ADDRESSING form, and nothing else: the ability to name a governed
+# solar-longitude crossing by the astronomical year it falls in, and to
+# receive the exact determination the published solver already makes for it.
+#
+# It exists because the only published way to reach an exact crossing is to
+# already hold an exact Terrestrial Time state, and a consumer that addresses
+# its world by year has no governed way to obtain one. Manufacturing a TT
+# state outside this Authority is precisely what must not happen: the
+# scientific timescale is this Authority's, and forming a state on it is a
+# scientific act rather than a formatting convenience.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# No search is run, no crossing is solved, no artifact is opened, no frontier
+# is consulted, no artifact is selected and no event kind is validated. The
+# operation forms one addressing state on the certified timescale and hands
+# the question to the published A3b-ii solver unchanged. Every scientific
+# decision - the frontier, the artifact, the sampling, the canonical event
+# identity, the strict ordering, the fail-closed taxonomy - stays where it
+# was certified, and none of it is re-derived, re-checked or worked around.
+#
+# Canonical solar-longitude identity is therefore inherited exactly. A3b-ii
+# canonicalizes each crossing against the governed predicate itself, so the
+# answer does not depend on which interval the search was handed: an event
+# addressed by year is bit-identical to the same event addressed by an
+# arbitrary anchor. No identity rule is introduced here, and none is needed.
+#
+# THE YEAR IS AN ADDRESS, NOT A TIME
+#
+# The addressing origin below is a SEARCH ORIGIN. It is never an event time,
+# never an approximation of one, never reported, and never compared against
+# anything. It exists only to say which crossing is meant. The instant that
+# IS reported is the canonical binary64 boundary A3b-ii determines, and
+# nothing derived from the origin reaches it.
+#
+# The rule is: begin at the start of the addressed year on the certified
+# timescale, and take the first governed crossing of the requested identity
+# strictly after it. Each of the four crossings occurs once per tropical
+# year, so the rule names exactly one event for each (year, kind) pair. That
+# uniqueness is a MEASURED property of this artifact and runtime generation
+# rather than a timeless one, and it is certified by the A3c-3 suite across
+# the supported domain instead of being assumed here.
+#
+# ASTRONOMICAL YEAR NUMBERING
+#
+# ``year`` is an integer in astronomical year numbering, passed to the
+# certified timescale exactly as received: 1 is 1 CE, 0 is 1 BCE, -1 is
+# 2 BCE. Year 0 exists and is a leap year, which is the defining signature of
+# this numbering and is certified as such.
+#
+# This is the Authority's scientific addressing coordinate. It is NOT an
+# HPC/SCE year and carries no constitutional chronology: the two are separate
+# layers, and nothing here maps between them. An HPC/SCE year numbering that
+# has no year zero is unaffected by a scientific coordinate that does.
+#
+# PROLEPTIC GREGORIAN ADDRESSING
+#
+# The certified timescale carries no Julian-calendar switchover
+# (ts.julian_calendar_cutoff is None), so the addressed year is a proleptic
+# Gregorian year throughout the entire supported domain, deep time included.
+# That is a property of the certified runtime and is certified as such rather
+# than assumed.
+#
+# It makes Gregorian chronology the ADDRESSING convention of this operation
+# and nothing more. No calendar field is returned, no Gregorian quantity is
+# authoritative for anything downstream, and the HPC calendar takes no
+# chronological authority from it.
+#
+# RELATIONSHIP TO THE FROZEN LEGACY YEAR PATH
+#
+# The frozen legacy equinox and season-event computations apply a +1 shift to
+# years at or below zero before addressing the timescale. This operation does
+# not reproduce that shift and does not repair it; the legacy path and its
+# BCE routes are untouched by this increment.
+#
+# The evidenced position is exactly this, and no more: the two coincide for
+# every year above zero, they diverge for years at or below zero, and the
+# legacy year behavior carries no behavioral certification of its own. Both
+# the agreement and the divergence are certified by the A3c-3 suite, so the
+# divergence is a recorded decision rather than an accident a later
+# maintainer might "repair" into agreement.
+#
+# NO OBSERVER, NO HEMISPHERE, NO CALENDAR
+#
+# The crossing is geocentric, so no observer participates and none is
+# accepted. The governed identity is the apparent geocentric solar ecliptic
+# longitude that defines the crossing; season names are hemisphere
+# conventions and month names are Gregorian, so neither is produced. Nothing
+# here decides a day, a weekday, a month, a year length or a feast date.
+#
+# THIS IS NOT A CIVIL-TIME CONVERTER
+#
+# A whole year is addressable; an arbitrary civil instant is not. There is
+# deliberately no month, day, hour, timezone, offset, ISO string or datetime
+# parameter, and no caller may supply one. A general civil-time to
+# Terrestrial Time conversion surface would let any consumer manufacture
+# anchors under its own rounding and ask about an instant nobody chose; this
+# operation exposes one governed addressing question and refuses to become
+# that surface.
+#
+# DEEP TIME: WHAT IS EXACT AND WHAT IS RECONSTRUCTED
+#
+# The returned event is the canonical exact Terrestrial Time root of a
+# geocentric solar-longitude crossing. It is determined by the pinned
+# ephemeris alone. No UTC, no Delta-T and no calendar participates in
+# determining it, so its exactness does not depend on any of them.
+#
+# The addressing origin is a different thing. It is formed on a UTC-like
+# civil scale that, in deep time, is a backward extrapolation rather than a
+# scale that existed, and the relationship between it and Earth rotation
+# rests on reconstructed Delta-T carrying real uncertainty. That uncertainty
+# belongs to civil-time reconstruction. It is NOT uncertainty in the
+# ephemeris-determined root, and the two must never be conflated.
+#
+# The reference ``utc`` rendering a consumer receives is subject to the same
+# reconstruction, and is absent entirely outside the span a calendar datetime
+# can express. It is reference information, never astronomical identity.
+#
+# This operation therefore does not claim to resolve ancient civil-time
+# uncertainty, and nothing here should be read as doing so. Delta-T
+# provenance, Earth-orientation data and their uncertainty budgets are
+# separate governed concerns and are neither introduced nor collapsed here.
+#
+# THE DOMAIN IS THE ARTIFACTS', NOT A DECLARED CONSTANT
+#
+# No year bound is declared here, and none may be. Support is a property of
+# the pinned NASA/JPL artifacts, read from their own segment metadata by A2-1
+# and enforced by the A3b-i frontier; a constant restating it could drift
+# from the artifacts it claims to describe and would then be believed over
+# them.
+#
+# A year the artifacts cannot support across the governed search horizon is
+# therefore refused by the substrate with its own stable coverage reason,
+# never accepted and quietly approximated. The boundaries that support
+# currently reaches are MEASURED evidence tied to this artifact generation
+# and live in the A3c-3 suite, cross-checked against actual declared
+# coverage, so that an artifact change fails certification instead of
+# silently changing what this operation answers.
+#
+# WHAT IS VALIDATED HERE, AND WHY ONLY THAT
+#
+# Exactly one thing the substrate cannot check for itself: that the year is a
+# genuine integer which the certified timescale can express as a finite
+# state. Both guards are load-bearing rather than defensive. A non-integer is
+# accepted by the timescale and silently addresses a different origin; a
+# sufficiently large integer yields a non-finite state without raising, and a
+# larger one raises while converting. Each is reported as a year failure,
+# because the year is what the caller actually supplied.
+#
+# Neither failure message interpolates the supplied value. A rejected year
+# may carry an unbounded number of digits, and a diagnostic that embeds it
+# would be unbounded too; the condition is what a caller needs, and the
+# condition is stated.
+#
+# Only OverflowError is caught. It is the conversion reporting that the
+# supplied magnitude has no float representation, which is a statement about
+# the year. Anything else is not such a statement and must propagate
+# unchanged rather than be relabelled as one.
+# ---------------------------------------------------------------------------
+
+REASON_EVENT_YEAR_INVALID = "EVENT_YEAR_INVALID"
+
+# The point in the addressed year that year addressing begins from, on the
+# certified timescale. It is a search origin and nothing else: not an event
+# time, not an approximation of one, and never reported.
+YEAR_ADDRESSING_MONTH = 1
+YEAR_ADDRESSING_DAY = 1
+
+
+def _year_addressing_anchor(year):
+    """Return the exact TT state the requested year is addressed from.
+
+    ``year`` is an integer in astronomical year numbering, handed to the
+    certified timescale unaltered.
+
+    bool is rejected before the integer check because it is a subclass of int
+    and would otherwise silently address year 0 or year 1.
+
+    The returned value is a search origin. It is passed to the published
+    solver and is never reported, compared or reused.
+    """
+    if isinstance(year, bool) or not isinstance(year, int):
+        raise SunsetChronologyError(
+            REASON_EVENT_YEAR_INVALID,
+            "SOLAR LONGITUDE EVENT YEAR INVALID - year must be an integer in "
+            "astronomical year numbering, received %s" % type(year).__name__,
+        )
+
+    try:
+        anchor = float(
+            ts.utc(year, YEAR_ADDRESSING_MONTH, YEAR_ADDRESSING_DAY).tt
+        )
+    except OverflowError as error:
+        raise SunsetChronologyError(
+            REASON_EVENT_YEAR_INVALID,
+            "SOLAR LONGITUDE EVENT YEAR INVALID - the requested year has no "
+            "representable magnitude on the certified timescale, so no "
+            "addressing state exists for it",
+        ) from error
+
+    if not math.isfinite(anchor):
+        raise SunsetChronologyError(
+            REASON_EVENT_YEAR_INVALID,
+            "SOLAR LONGITUDE EVENT YEAR INVALID - the start of the requested "
+            "year is not a finite Terrestrial Time state",
+        )
+
+    return anchor
+
+
+def find_solar_longitude_event_in_year(year, kind):
+    """Return the governed crossing of ``kind`` addressed by a year.
+
+    ``year`` is an integer in astronomical year numbering: 1 is 1 CE, 0 is
+    1 BCE, -1 is 2 BCE. It is an addressing selector, not an HPC/SCE year and
+    not a returned quantity. ``kind`` is one of the four governed
+    solar-longitude identities; it is passed to the published solver
+    unaltered and is not second-guessed here.
+
+    Returns the AstronomicalEvent the published A3b-ii solver determines: the
+    canonical binary64 boundary of the crossing, the requested identity, and
+    the pinned NASA/JPL artifact the search actually ran under.
+
+    NEVER returns None. Either a crossing is determined or the operation
+    fails closed.
+
+    Fails closed with this operation's own stable reason when the year is not
+    an integer the certified timescale can express, and otherwise preserves
+    the substrate's stable reason unchanged - for an ungoverned event kind,
+    or for a year the pinned artifacts do not support across the governed
+    search horizon.
+
+    The year is validated before the kind because a question cannot be asked
+    from an origin that does not exist. That is the precedence the substrate
+    already applies between its own anchor and its kind.
+
+    No observer is accepted, no civil instant participates, no artifact is
+    chosen and no HTTP semantics are decided here.
+    """
+    anchor = _year_addressing_anchor(year)
+
+    return find_solar_longitude_event_after(anchor, kind)

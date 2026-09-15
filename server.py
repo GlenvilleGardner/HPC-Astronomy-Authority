@@ -23,6 +23,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     find_next_sunset_after_utc,
     find_solar_longitude_event_after,
     find_solar_longitude_event_before,
+    find_solar_longitude_event_in_year,
     find_sunset_bracket,
     find_sunset_successor,
     get_default_kernel_name,
@@ -602,3 +603,99 @@ def sunset_bracket(ttBits: str, latitude: float, longitude: float):
         )
 
     return project_sunset_bracket(bracket)
+
+
+# ---------------------------------------------------------------------------
+# A3c-3 - year-addressed exact solar-longitude event route.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The HTTP surface for the published year-addressed operation: which governed
+# solar-longitude crossing the Authority determines for a given astronomical
+# year, returned as the exact event projection every other exact route
+# already emits.
+#
+# It is the one addressing form a consumer that has no exact Terrestrial Time
+# state can use. Without it such a consumer would have to construct a TT
+# state itself, which is scientific timescale work and is this Authority's.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# The route hands the year and the kind to the published operation and
+# projects whatever comes back. It forms no addressing state, runs no search,
+# selects no artifact, validates no event kind, decides no domain and
+# re-derives none of the scientific decisions, all of which stay where they
+# were certified.
+#
+# THE YEAR IS AN ADDRESS, NOT AN INSTANT
+#
+# ``year`` selects which crossing is meant and is never an event time. It is
+# an astronomical-year integer - 1 is 1 CE, 0 is 1 BCE, -1 is 2 BCE - and it
+# is deliberately the ONLY temporal parameter. There is no month, day, hour,
+# date, ISO instant, timezone or decimal TT parameter, because this route
+# addresses a year and must not become a civil-time conversion surface. There
+# is no observer, because the crossing is geocentric, and no kernel, because
+# artifact selection is the substrate's.
+#
+# The addressing year is not echoed back. The response is the exact event and
+# only the exact event: a consumer that received its own input alongside the
+# result could mistake the address for the answer.
+#
+# THIS IS NOT THE LEGACY EQUINOX ROUTE
+#
+# /equinox/{year} is frozen, published and untouched. It renders at whole
+# seconds and applies its own +1 shift to years at or below zero. This route
+# is additive, exact, and uses astronomical year numbering without that
+# shift. The two agree on which crossing is meant for every year above zero
+# and diverge at or below zero; neither claim is left implicit, and both are
+# certified.
+#
+# ONE FAILURE SHAPE
+#
+# No ttBits is decoded here, so there is no transport failure to keep apart
+# from a scientific one. Every governed refusal - a year the timescale cannot
+# express, an ungoverned event kind, or a year the pinned artifacts do not
+# support - is the substrate's own, reported as HTTP 400 with its stable
+# reason unchanged.
+#
+# Only SunsetChronologyError is caught. An unexpected failure is not a
+# governed rejection and must stay visible rather than be relabelled as one.
+#
+# There is no absence outcome and therefore no 404: the published operation
+# never returns None, so every request either yields an event or reports why
+# it could not.
+#
+# ADDITIVE
+#
+# No existing route is touched.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/solar-longitude-event-in-year")
+def solar_longitude_event_in_year(year: int, kind: str):
+    """Return the governed crossing of ``kind`` addressed by a year.
+
+    ``year`` is an astronomical-year integer: 1 is 1 CE, 0 is 1 BCE, -1 is
+    2 BCE. It is an addressing selector for a geocentric crossing, not an
+    HPC/SCE year and not part of the response. ``kind`` is one of the
+    governed solar-longitude identities; it is passed to the published
+    operation unaltered and is not second-guessed here.
+
+    Returns the exact event projection: the canonical Terrestrial Time state
+    of the crossing, its governed identity, and the artifact provenance of
+    the search that determined it. The ``utc`` field is reference
+    information and is null wherever the instant lies outside the span a
+    calendar datetime can express.
+
+    Fails closed with HTTP 400 carrying the substrate's stable reason. There
+    is no 404 and no empty success.
+    """
+    try:
+        event = find_solar_longitude_event_in_year(year, kind)
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_astronomical_event(event)

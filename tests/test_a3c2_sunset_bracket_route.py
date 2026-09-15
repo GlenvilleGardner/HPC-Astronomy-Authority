@@ -150,6 +150,19 @@ FRAMEWORK_ROUTES = frozenset(
 
 A3C2_BLOCK_MARKER = "# A3c-2 - exact sunset bracket route."
 
+# Application routes added by governed increments AFTER A3c-2.
+#
+# A3c-2's closed-world claims are about the surface AS OF A3c-2: that this
+# increment added exactly one route, and that the fourteen routes preceding
+# it all survive. A later additive increment does not weaken either claim,
+# but it does make an unqualified count of the whole application factually
+# wrong. Subtracting the later additions keeps both claims exactly as strong
+# as they were while letting them stay true.
+#
+# Each entry is owned by the increment that added it, and its own suite owns
+# the closed world as of that increment.
+POST_A3C2_ROUTES = frozenset({"/solar-longitude-event-in-year"})
+
 
 # --- Independent helpers ---------------------------------------------------
 
@@ -272,7 +285,7 @@ class TestRouteSurface(BracketAssertions):
         )
 
     def test_exactly_one_application_route_was_added(self):
-        found = set(registered_routes()) - FRAMEWORK_ROUTES
+        found = set(registered_routes()) - FRAMEWORK_ROUTES - POST_A3C2_ROUTES
         expected = {path for path, _n, _p in LEGACY_ROUTES} | {BRACKET_PATH}
         self.assertEqual(found, expected)
         self.assertEqual(len(found), 15)
@@ -838,7 +851,7 @@ class TestLegacyRoutesUnchanged(unittest.TestCase):
                 self.assertEqual(endpoint_parameters, parameters)
 
     def test_legacy_count_is_exactly_fourteen(self):
-        found = set(registered_routes()) - FRAMEWORK_ROUTES
+        found = set(registered_routes()) - FRAMEWORK_ROUTES - POST_A3C2_ROUTES
         legacy = found - {BRACKET_PATH}
         self.assertEqual(len(legacy), len(LEGACY_ROUTES))
         self.assertEqual(legacy, {path for path, _n, _p in LEGACY_ROUTES})
