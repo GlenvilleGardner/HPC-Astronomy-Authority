@@ -391,7 +391,8 @@ class TestTransportIsolation(unittest.TestCase):
             [n.name for n in tree.body if isinstance(n, ast.FunctionDef)],
             ["utc_reference", "project_exact_instant",
              "project_astronomical_event", "project_sunset_event",
-             "project_sunset_bracket", "reason_detail"],
+             "project_sunset_bracket", "reason_detail",
+             "project_sunset_count"],
         )
         self.assertEqual(
             [n.name for n in tree.body if isinstance(n, ast.ClassDef)], []

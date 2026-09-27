@@ -164,6 +164,7 @@ A3C2_BLOCK_MARKER = "# A3c-2 - exact sunset bracket route."
 POST_A3C2_ROUTES = frozenset({
     "/solar-longitude-event-in-year",
     "/sunset-event-after",
+    "/sunset-count",
 })
 
 
@@ -812,7 +813,8 @@ class TestA3c2StructuralIsolation(unittest.TestCase):
             [n.name for n in tree.body if isinstance(n, ast.FunctionDef)],
             ["utc_reference", "project_exact_instant",
              "project_astronomical_event", "project_sunset_event",
-             "project_sunset_bracket", "reason_detail"],
+             "project_sunset_bracket", "reason_detail",
+             "project_sunset_count"],
         )
         self.assertEqual(
             [n for n in tree.body if isinstance(n, ast.Assign)], []

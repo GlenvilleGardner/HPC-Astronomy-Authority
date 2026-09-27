@@ -15,6 +15,7 @@ verify_runtime_scientific_components()
 from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     SunsetChronologyError,
     SunsetSuccessorError,
+    count_sunsets_in_interval,
     solar_longitude,
     subsolar_point,
     find_equinox,
@@ -33,6 +34,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
 from astronomical_event_transport import (  # noqa: E402 - gate runs first
     project_astronomical_event,
     project_sunset_bracket,
+    project_sunset_count,
     project_sunset_event,
     reason_detail,
 )
@@ -855,3 +857,168 @@ def sunset_event_after(ttBits: str, latitude: float, longitude: float):
         )
 
     return project_sunset_event(event)
+
+
+# ---------------------------------------------------------------------------
+# A4 - ABC-1 bulk sunset count route.
+#
+# The marker above obeys the repository's governed block grammar
+# (^# A\d+[a-z]?(?:-[0-9a-z]+)? - ). That is load-bearing: the published route
+# source guards delimit each block from its own marker to the NEXT one, so a
+# terminal block written under an unrecognised marker would silently be read
+# as part of the block before it.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The HTTP surface for one published question: how many genuine
+# observer-local sunset transitions occur inside an exact Terrestrial Time
+# interval. The answer is an integer.
+#
+# It exists because the only way to obtain that integer across this Authority
+# today is to walk the directional successor route once per sunset. For a
+# year-scale interval that is roughly three hundred and sixty-six requests,
+# three hundred and sixty-six frontier admissions and three hundred and
+# sixty-six searches, to produce one number. This asks the same certified
+# question once.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# The route decodes two exact bounds, hands them and the observer to the
+# published count solver, and projects whatever comes back. It runs no
+# search, selects no artifact, admits no frontier, applies no resource bound
+# of its own and re-derives none of the scientific decisions - the supported
+# frontier, the artifact selection, the half-open interval contract, the
+# governed span admission, the strict binary64 comparisons - which all stay
+# where they were certified.
+#
+# Exactly one solver invocation. There is no loop over sunsets here, no
+# accumulation, no second call and no retry: a count assembled by this layer
+# from several answers would be a different quantity than the one the solver
+# certifies, and nothing in this block could establish that it was right.
+#
+# HOW MANY, NEVER WHICH
+#
+# The response carries an integer, the interval it belongs to, the artifact
+# that produced it and nothing else. No crossing, no root, no array and no
+# individual event identity is published, because the solver does not retain
+# any. A consumer needing a boundary asks a directional route for it.
+#
+# No calendar meaning is produced either: no weekday, no ordinal, no month,
+# no year, no year type, no 365/366 classification. This is an astronomy
+# count primitive and it stays one.
+#
+# THE BOUNDS ARE BITS, NOT DECIMALS
+#
+# Both bounds are supplied as ttBits, the IEEE-754 spelling of an exact
+# binary64 state, exactly as every other route in the exact layer requires. A
+# decimal query parameter would be a different contract: it would invite a
+# client to round, reformat or re-parse the value under its own rule and
+# silently ask about a different interval. There is deliberately no tt
+# parameter, no UTC, no civil date, no civil year and no kernel selector.
+#
+# BOTH BOUNDS ARE RETURNED, AND SO IS WHAT WAS ACTUALLY COVERED
+#
+# Unlike a single directional result, a count MAKES A CLAIM ABOUT AN
+# INTERVAL, so the interval is part of the claim and is echoed. The covered
+# pair is published alongside it because the two can legitimately differ: a
+# frontier shortened by exhausted coverage answers for less territory than
+# was asked about, and reporting only the requested pair would attribute to
+# the whole interval a number belonging to part of it.
+#
+# TWO FAILURES, KEPT APART
+#
+# A malformed ttBits is a TRANSPORT failure: the exact state was never
+# received, so no scientific question was asked and none was refused. It
+# reports the transport reason. A state that WAS received and then refused by
+# the substrate - a malformed instant, a non-ascending interval, a span
+# beyond the governed admission bound, an observer outside the geodetic
+# domain, exhausted coverage or exhausted computational reach - reports the
+# substrate's own stable reason, unchanged.
+#
+# Only those two exception types are caught. An unexpected failure is not a
+# governed rejection and must stay visible rather than be relabelled as one.
+#
+# The governed span refusal is projected exactly like every other
+# substrate-domain refusal, at 400 with its stable reason. It is a statement
+# that the Authority declines to answer a question of that size, which is the
+# same category of answer as declining a malformed instant, and inventing a
+# second HTTP policy for it would make one governed refusal look unlike the
+# rest for no scientific reason.
+#
+# ZERO IS AN ANSWER, NOT AN ABSENCE
+#
+# A complete frontier containing no sunset counts zero and returns 200. This
+# deliberately differs from the directional routes, which report 404 for an
+# astronomical absence: they were asked WHICH sunset and there is none, while
+# this was asked HOW MANY and the answer exists and is zero. Reporting that
+# as an absence would discard a successful measurement, and would make a
+# genuine polar-night count indistinguishable from a failure to obtain one.
+#
+# An INCOMPLETE frontier is likewise not an error. It is a smaller true
+# answer, and it is returned with complete=false and the substrate's own
+# truncation reason so a consumer can tell the two apart. Nothing here
+# promotes a partial result to a whole one, discards it, fabricates coverage,
+# stitches a second artifact or retries to manufacture completeness.
+#
+# SCIENTIFIC ENVIRONMENT
+#
+# This route is stateless, exactly as the rest of the exact layer is. It
+# carries no environment fingerprint, because the certified runtime is
+# verified once at startup before any astronomy is loaded, and a request
+# answered by this process is answered under that verified runtime.
+#
+# ADDITIVE
+#
+# No existing route is touched, and the observer domain, its validation, the
+# interval contract and every stable reason all remain the substrate's.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/sunset-count")
+def sunset_count(
+    ttLoBits: str, ttHiBits: str, latitude: float, longitude: float
+):
+    """Return how many genuine sunsets lie in an exact TT interval.
+
+    ``ttLoBits`` and ``ttHiBits`` are the IEEE-754 spellings of the exact
+    binary64 Terrestrial Time bounds. Neither need be a sunset. The interval
+    is half-open below and closed above - a sunset is counted when
+    ``lo < sunset.tt <= hi`` - and that contract belongs to the published
+    solver, not to this route. ``latitude`` and ``longitude`` are the
+    observer, validated by the substrate against its own governed geodetic
+    domain and not re-validated or normalized here.
+
+    Returns the count projection: the integer, the requested interval, the
+    interval actually covered, the completeness of that coverage, whether a
+    counted sunset coincides exactly with the requested upper bound, and the
+    artifact provenance of the single search that determined it. No sunset
+    identity is published.
+
+    Fails closed with HTTP 400 carrying a stable reason, for a malformed
+    bound or for the substrate's own governed refusal - including a requested
+    span beyond the governed admission bound.
+
+    A count of zero is a successful answer, not an absence, and a frontier
+    that could not be fully admitted returns its partial count explicitly
+    marked incomplete rather than failing.
+    """
+    try:
+        interval_lo = decode_tt_bits(ttLoBits)
+        interval_hi = decode_tt_bits(ttHiBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        record = count_sunsets_in_interval(
+            interval_lo, interval_hi, latitude, longitude
+        )
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_sunset_count(record)

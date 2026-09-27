@@ -193,3 +193,73 @@ def reason_detail(reason, message):
         "reason": reason,
         "message": message,
     }
+
+
+def project_sunset_count(record):
+    """Return the wire projection of a bulk observer-local sunset count.
+
+    ``record`` is a published SunsetCount. Its integer, its bounds, its
+    completeness and its artifact provenance are carried through unchanged;
+    nothing is recomputed, reinterpreted or renamed, and the record itself is
+    not modified.
+
+    HOW MANY, NEVER WHICH
+
+    A count answers a different question from an event, and this projection
+    keeps it that way. No crossing, no root, no array of instants and no
+    individual event identity appears here, and none may ever be added: the
+    solver deliberately does not retain them, so there is nothing to leak
+    even by accident. A consumer needing boundaries must ask the published
+    directional routes for them, one at a time, which is the only place the
+    Authority will state a sunset's identity.
+
+    Nor is any calendar meaning produced. There is no weekday, no day
+    ordinal, no month, no year, no year type and no 365/366 classification.
+    The integer is an astronomical count of transitions; what a calendar
+    makes of it is a question for a consumer that this Authority does not
+    answer.
+
+    FOUR BOUNDS, BECAUSE TWO WOULD BE A CLAIM
+
+    ``requested`` is what the caller asked about. ``covered`` is the frontier
+    the search actually examined. They are both published because they can
+    legitimately differ: authoritative coverage or evaluable reach may end
+    before the requested upper bound, and a count reported against only the
+    requested pair would silently attribute to the whole interval a number
+    that belongs to part of it.
+
+    Each of the four is projected through the same exact-instant projection
+    every other route uses, so ``ttBits`` remains the identity, ``tt`` is
+    produced from those same bits rather than alongside them, and ``utc`` is
+    reference information that is null wherever no calendar rendering exists.
+
+    ``complete`` and ``truncationReason`` are one statement in two fields:
+    the reason is null exactly when the frontier was whole. Together they are
+    what stops a partial count from being read as a total, and a count of
+    zero over a COMPLETE frontier - the ordinary polar answer - from being
+    confused with a search that ran out of territory.
+
+    ``boundaryCoincident`` reports one physical fact: a counted sunset's
+    exact state equals the requested upper bound at binary64 equality. It
+    decides nothing. Which interval such a crossing belongs to is a calendar
+    question, and the Authority states the fact rather than resolving it.
+
+    ``kernel`` is the single pinned NASA/JPL artifact the one admitted
+    frontier ran under. It is singular because the search was: nothing here
+    spans two artifacts, so no per-bound provenance exists to report.
+    """
+    return {
+        "sunsetCount": record.count,
+        "requested": {
+            "lo": project_exact_instant(record.requested_lo),
+            "hi": project_exact_instant(record.requested_hi),
+        },
+        "covered": {
+            "lo": project_exact_instant(record.covered_lo),
+            "hi": project_exact_instant(record.covered_hi),
+        },
+        "complete": record.complete,
+        "truncationReason": record.truncation_reason,
+        "boundaryCoincident": record.boundary_coincident,
+        "kernel": record.kernel,
+    }

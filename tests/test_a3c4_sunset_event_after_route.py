@@ -1127,8 +1127,21 @@ class TestExistingContractsUnchanged(unittest.TestCase):
                 self.assertEqual(endpoint_name, name)
                 self.assertEqual(endpoint_parameters, parameters)
 
+    # Application routes added by governed increments AFTER A3c-4.
+    #
+    # A3c-4's closed-world claim is about the surface AS OF A3c-4: that this
+    # increment added exactly one route. A later additive increment does not
+    # weaken that claim, but it does make an unqualified count of the whole
+    # application factually wrong. Subtracting the later additions keeps the
+    # claim exactly as strong as it was while letting it stay true.
+    #
+    # Each entry is owned by the increment that added it, and its own suite
+    # owns the closed world as of that increment.
+    POST_A3C4_ROUTES = frozenset({"/sunset-count"})
+
     def test_a3c4_added_exactly_one_application_route(self):
-        found = set(registered_routes()) - self.FRAMEWORK_ROUTES
+        found = (set(registered_routes()) - self.FRAMEWORK_ROUTES
+                 - self.POST_A3C4_ROUTES)
         expected = {
             path for path, _n, _p in self.LEGACY_ROUTES + self.EXACT_ROUTES
         } | {EVENT_AFTER_PATH}
