@@ -165,6 +165,7 @@ POST_A3C2_ROUTES = frozenset({
     "/solar-longitude-event-in-year",
     "/sunset-event-after",
     "/sunset-count",
+    "/scientific-environment",
 })
 
 

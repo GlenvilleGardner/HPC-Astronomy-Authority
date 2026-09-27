@@ -1281,7 +1281,9 @@ class TestExistingContractsUnchanged(unittest.TestCase):
     #
     # Each entry is owned by the increment that added it, and its own suite
     # owns the closed world as of that increment.
-    POST_A3C3_ROUTES = frozenset({"/sunset-event-after", "/sunset-count"})
+    POST_A3C3_ROUTES = frozenset({
+        "/sunset-event-after", "/sunset-count", "/scientific-environment",
+    })
 
     def test_every_preexisting_route_is_registered_unchanged(self):
         found = registered_routes()

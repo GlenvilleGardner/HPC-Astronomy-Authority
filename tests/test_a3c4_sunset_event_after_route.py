@@ -1137,7 +1137,7 @@ class TestExistingContractsUnchanged(unittest.TestCase):
     #
     # Each entry is owned by the increment that added it, and its own suite
     # owns the closed world as of that increment.
-    POST_A3C4_ROUTES = frozenset({"/sunset-count"})
+    POST_A3C4_ROUTES = frozenset({"/sunset-count", "/scientific-environment"})
 
     def test_a3c4_added_exactly_one_application_route(self):
         found = (set(registered_routes()) - self.FRAMEWORK_ROUTES

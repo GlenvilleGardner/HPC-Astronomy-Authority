@@ -13,6 +13,10 @@ from runtime_enforcement import verify_runtime_scientific_components
 verify_runtime_scientific_components()
 
 from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
+    ANCIENT_KERNEL,
+    EPHEMERIS_DIR,
+    FUTURE_KERNEL,
+    PRIMARY_KERNEL,
     SunsetChronologyError,
     SunsetSuccessorError,
     count_sunsets_in_interval,
@@ -48,6 +52,39 @@ from sunset_cursor import (  # noqa: E402 - deliberate: gate runs first
     SunsetCursorError,
     decode_sunset_cursor,
     encode_sunset_cursor,
+)
+from scientific_provenance import (  # noqa: E402 - gate runs first
+    establish_scientific_provenance,
+    scientific_provenance,
+)
+
+# Establish this process's scientific identity before it can serve anything.
+#
+# THE SECOND STARTUP GATE, AND IT IS DELIBERATELY HERE RATHER THAN BESIDE THE
+# FIRST. The A0.3 gate above runs before any astronomy is imported, because an
+# uncertified runtime must never build a timescale. This one cannot: the
+# canonical ephemeris manifest binds each routing role to the bytes of the
+# artifact it routes to, and the routing names belong to the astronomy module
+# imported above. So it runs at the earliest point where the material it
+# describes exists, and still before the application object below and
+# therefore before any route can be reached.
+#
+# The two gates answer different questions. A0.3 asks whether this runtime is
+# the certified one and refuses to start if not. This asks what this process
+# actually IS, and records the answer. Neither substitutes for the other.
+#
+# Roughly nineteen seconds of that is hashing the pinned NASA/JPL artifact set,
+# and it is paid once, on purpose. An Authority that cannot state its own
+# scientific identity must not answer scientific questions, so a failure here
+# raises out of import and the process does not start. There is no degraded
+# mode and no partially initialised provenance endpoint.
+establish_scientific_provenance(
+    ephemeris_dir=EPHEMERIS_DIR,
+    routing_names={
+        "ancient": ANCIENT_KERNEL,
+        "future": FUTURE_KERNEL,
+        "primary": PRIMARY_KERNEL,
+    },
 )
 
 app = FastAPI(title="HPC Astronomy Authority")
@@ -1022,3 +1059,91 @@ def sunset_count(
         ) from error
 
     return project_sunset_count(record)
+
+
+# ---------------------------------------------------------------------------
+# A5 - scientific environment provenance route.
+#
+# The marker above obeys the repository's governed block grammar
+# (^# A\d+[a-z]?(?:-[0-9a-z]+)? - ). That is load-bearing: the published route
+# source guards delimit each block from its own marker to the NEXT one, so a
+# terminal block written under an unrecognised marker would silently be read
+# as part of the block before it.
+#
+# WHAT THIS ROUTE ADDS
+#
+# One question, and it is not astronomical: what scientific environment is
+# this Authority actually running under?
+#
+# Every astronomical response already carries the pinned artifact a
+# determination ran under. That is per-computation provenance and it remains
+# the only statement about WHICH kernel answered. It is not enough to decide
+# whether a result obtained last month is still equivalent to one obtained
+# today: a changed Skyfield, numpy, jplephem, IERS table or artifact content
+# would leave that filename identical while the science moved underneath it.
+#
+# This route publishes the identity that does change in those cases, so a
+# consumer persisting certified results can invalidate them correctly instead
+# of trusting them indefinitely.
+#
+# NO ASTRONOMY, AND NOTHING DISCOVERED HERE
+#
+# The request path loads no kernel, builds no timescale, solves nothing,
+# hashes nothing, opens no file and inspects no installation. Every value was
+# collected once at startup, before this application object existed, and this
+# reads it. That is not an optimization: recomputing the identity per request
+# would rehash 3.3 GB of pinned artifacts to re-derive a constant.
+#
+# NO FAILURE MODE OF ITS OWN
+#
+# Establishment happens at startup and a failure there stops the process, so a
+# reachable route implies an established identity. There is deliberately no
+# 503, no partially initialised state and no self-reported unavailability: a
+# running Authority either knows what it is or does not exist.
+#
+# THE IDENTITY IS CHECKABLE, NOT MERELY ASSERTED
+#
+# The response carries the canonical environment, the derived identifier, and
+# the canonical ephemeris manifest. A consumer can therefore verify both
+# derivations independently rather than taking either on trust:
+#
+#     canonical_digest(environment)        == scientificEnvironmentId
+#     derive_ephemeris_data_set_id(manifest) == environment.ephemerisDataSetId
+#
+# The manifest is the identifier's PREIMAGE, not a duplicate of it. Nothing
+# else is added: no field already represented canonically is repeated, and no
+# second vocabulary is invented for an identifier A0.1 has already named.
+#
+# WHAT IS DELIBERATELY ABSENT
+#
+# No filesystem path, no host, no port, no process identifier, no environment
+# variable, no credential and no operational internal. Artifact routing names
+# are filenames every astronomical response already publishes as `kernel`, and
+# artifact hashes are content identity. Nothing here discloses where anything
+# lives.
+#
+# Sampling policy is also absent, deliberately. The certified predicate's grid
+# is a property of the Skyfield version already named here, and a deliberate
+# Authority change to it is a scientific behaviour change that must advance
+# authoritySolverGeneration rather than appear as a new field.
+#
+# ADDITIVE
+#
+# No existing route is touched and no astronomical contract changes.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/scientific-environment")
+def scientific_environment():
+    """Return the scientific identity this Authority established at startup.
+
+    ``environment`` is the canonical scientific environment record.
+    ``scientificEnvironmentId`` is its canonical digest.
+    ``ephemerisManifest`` is the canonical manifest that
+    ``environment.ephemerisDataSetId`` was derived from, published so the
+    derivation can be reproduced independently.
+
+    Takes no parameters, performs no astronomy, and cannot fail: the identity
+    was established before this route became reachable.
+    """
+    return scientific_provenance()

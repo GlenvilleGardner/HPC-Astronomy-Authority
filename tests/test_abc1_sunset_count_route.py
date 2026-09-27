@@ -745,9 +745,15 @@ class TestRouteSourceGuard(unittest.TestCase):
         self.assertNotEqual(own, -1, "A4 route block marker not found")
         self.assertIsNotNone(self.GOVERNED_BLOCK_MARKER.match(source, own))
 
-        # Terminal block: the symbols below it are this operation's alone.
-        self.assertIsNone(self.GOVERNED_BLOCK_MARKER.search(source, own + 1))
-        self.assertGreater(source.find("def sunset_count("), own)
+        # The block owns its own symbols: nothing governed intervenes between
+        # this marker and the route it introduces. A LATER governed block may
+        # follow - it must simply begin after that route, not inside it.
+        own_function = source.find("def sunset_count(")
+        self.assertGreater(own_function, own)
+
+        following = self.GOVERNED_BLOCK_MARKER.search(source, own + 1)
+        if following is not None:
+            self.assertGreater(following.start(), own_function)
 
     def test_the_preceding_governed_block_is_still_delimited(self):
         """A3c-4 must still be a block, now terminated by this one."""
@@ -861,6 +867,15 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
                 self.assertIn(path, routes)
                 self.assertEqual(routes[path][1], endpoint)
 
+    # Application routes added by governed increments AFTER A4.
+    #
+    # A4's closed-world claim is about the surface AS OF A4: that this
+    # increment added exactly one route. A later additive increment does not
+    # weaken that claim, but it does make an unqualified count of the whole
+    # application factually wrong. Subtracting the later additions keeps the
+    # claim exactly as strong as it was while letting it stay true.
+    POST_A4_ROUTES = frozenset({"/scientific-environment"})
+
     def test_exactly_one_route_was_added(self):
         routes = registered_routes()
         published = {
@@ -868,7 +883,7 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
             if not path.startswith("/openapi")
             and not path.startswith("/docs")
             and not path.startswith("/redoc")
-        }
+        } - self.POST_A4_ROUTES
 
         self.assertEqual(
             published - set(self.PREVIOUS), {COUNT_PATH}
