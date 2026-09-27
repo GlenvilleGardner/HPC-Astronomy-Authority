@@ -2876,3 +2876,302 @@ def find_solar_longitude_event_in_year(year, kind):
     anchor = _year_addressing_anchor(year)
 
     return find_solar_longitude_event_after(anchor, kind)
+
+
+# ---------------------------------------------------------------------------
+# A4 - ABC-1 bulk observer-local sunset count.
+#
+# The marker above obeys the repository's governed block grammar
+# (^# A\d+[a-z]?(?:-[0-9a-z]+)? - ). That is load-bearing, not cosmetic: the
+# published source guards delimit each governed block from its own marker to
+# the NEXT one, so a terminal block written under a marker the grammar does
+# not recognise would silently be read as part of the block before it.
+#
+# WHAT THIS OPERATION ADDS
+#
+# One astronomical question: how many genuine observer-local sunset
+# transitions occur inside an exact Terrestrial Time interval? The answer is
+# an integer.
+#
+# COUNT EVIDENCE, NOT EVENT IDENTITY
+#
+# This operation reports HOW MANY. It never reports WHICH. No sunset root, no
+# array of crossings, no event record and no exact sunset timestamp leaves
+# this block, and none may ever be added to it.
+#
+# The distinction is scientific, not stylistic. Counting is bracket-robust:
+# the sunsets being counted are separated by roughly a day, while the
+# bracket-dependent jitter in any individual root is nanoseconds, so no
+# threshold decides how many there are. An exact instant carries no such
+# freedom, and the published directional solvers - which this operation does
+# not replace, weaken or duplicate - remain the only source of sunset
+# identity. A consumer needing boundaries must still walk them one at a time.
+#
+# THE INTERVAL IS HALF-OPEN BELOW AND CLOSED ABOVE
+#
+#     tt_lo < sunset.tt <= tt_hi
+#
+# Stated as two exact binary64 comparisons. There is no epsilon, no tolerance
+# and no nearest-event rule.
+#
+# The asymmetry is deliberate and it is what makes adjacent intervals tile
+# without double counting or omission: a sunset lying exactly on a shared
+# boundary belongs to the earlier interval and to that one only. A consumer
+# composing consecutive intervals therefore counts every sunset exactly once,
+# which a closed-closed or open-open form could not promise.
+#
+# NO ARITHMETIC SHORTCUT IS PERMITTED HERE
+#
+# The integer is ENUMERATED from transitions the certified root finder
+# actually reported. No elapsed duration is divided by a nominal day, no
+# Terrestrial Time span is converted to a count, no rounding, flooring or
+# ceiling infers one, no civil or Gregorian date participates, no mean solar
+# day is assumed, no solar-transit ordinal or hour-angle winding number
+# substitutes for enumeration, and no other observer's cadence is used for
+# this one. A count is what the astronomy produced or it is nothing.
+#
+# SAMPLING RESOLUTION - STATED HONESTLY
+#
+# The certified predicate almanac.sunrise_sunset carries step_days = 0.04,
+# and find_discrete derives its initial grid from that: roughly a sample an
+# hour. Skyfield documents the intent as catching days at least an hour long.
+#
+# A sun-up or sun-down state SHORTER than that grid spacing can fall entirely
+# between two adjacent samples, presenting no change of value, and both of the
+# transitions bounding it are then missed together. That is measurable: near
+# the polar circles, where the last brief day before polar night shrinks
+# toward nothing, a whole-year count under this grid can fall short of a
+# finer one by one to three sunsets.
+#
+# NO FINITE STEP REMOVES THIS. The duration of that brief state is a
+# continuous function of latitude which passes through zero at the latitude
+# where the day ceases to exist, so for ANY chosen step there is an admitted
+# observer whose shortest state is shorter than the grid. Completeness over
+# the governed geodetic domain is therefore not a claim this operation can
+# make, and it does not make it. What it counts is exactly what the certified
+# predicate's own grid resolves.
+#
+# The step is deliberately NOT overridden here. The published directional
+# solvers search the same predicate at the same resolution, so matching it is
+# what keeps a count and a walk over the same territory in agreement. A finer
+# grid used only here would make this operation disagree with the certified
+# path, which would be a different answer rather than a better one.
+#
+# This is an astronomical limitation of the certified computation. Which
+# observers a CALENDAR may be constructed for is a separate question, decided
+# above this layer, and no latitude restriction belonging to a consumer is
+# imposed here.
+#
+# ONE FRONTIER, ONE ARTIFACT, NO STITCHING
+#
+# Exactly one search is performed, over exactly the interval the published
+# frontier substrate returned, under exactly the artifact it named. There is
+# no subdivision, no resumption, no partitioning across coverage boundaries
+# and no retry under a second artifact. Any of those would require asserting
+# that two independently bracketed searches meet exactly at a seam, which is
+# an event-identity claim this Authority refuses to make.
+#
+# A requested interval that no single artifact can support is therefore
+# answered over the shortened frontier, with complete=False and the
+# substrate's own truncation reason carried through. A partial count is never
+# presented as a whole one.
+#
+# ZERO IS AN ANSWER
+#
+# A fully admitted interval containing no resolved sunset transition counts
+# zero. At high latitude that is the ordinary, correct result for an interval
+# inside polar day or polar night, and it is not an error, not an absence
+# signal and not a failure. It is distinguished from a truncated search by
+# the completeness flag alone.
+# ---------------------------------------------------------------------------
+
+REASON_COUNT_INTERVAL_TOO_LONG = "COUNT_INTERVAL_TOO_LONG"
+
+# The widest interval one count operation will admit, in Terrestrial Time days.
+#
+# A RESOURCE ADMISSION BOUND, NOT A SCIENTIFIC ONE. The astronomy is correct
+# for any interval; the cost is not. Work scales with the requested span - a
+# year-scale scan lays roughly nine thousand initial samples and evaluates the
+# certified topocentric computation some seventy thousand times - so a span
+# chosen by a caller is a cost chosen by a caller, and this is the only route
+# into this module where that is true.
+#
+# The value is derived from the widest interval the intended consumer can
+# legitimately need. Successive governed spring crossings lie 365.235 to
+# 365.247 days apart across the whole of the primary artifact's coverage, so
+# 400 days admits every such interval with better than a month of margin and
+# still refuses a request that could occupy the process for hours.
+#
+# It is a deployment fact stated as a constant, not a constitutional one, and
+# it governs admission only: it is never consulted as a length, a year, a
+# cadence or a count.
+COUNT_MAX_SPAN_DAYS = 400.0
+
+
+@dataclass(frozen=True)
+class SunsetCount:
+    """How many genuine observer-local sunsets an exact interval contains.
+
+    ``count`` is the integer, enumerated from transitions the certified root
+    finder reported inside the covered frontier. It is the whole scientific
+    payload; everything else on this record describes what territory it is a
+    count OF.
+
+    ``requested_lo`` and ``requested_hi`` are the caller's own exact binary64
+    states, carried through unaltered. ``covered_lo`` and ``covered_hi`` are
+    the frontier actually examined. They differ from the requested pair only
+    when authoritative coverage or evaluable reach ran out first, and the
+    lower bound never moves.
+
+    ``complete`` is True only when the covered frontier is the entire
+    requested interval. ``truncation_reason`` is None exactly when
+    ``complete`` is True, and otherwise carries the substrate's own stable
+    code. The two together are what keep a partial count from being mistaken
+    for a whole one.
+
+    ``boundary_coincident`` reports one physical fact and decides nothing: a
+    counted sunset's exact state equals ``requested_hi`` at binary64
+    equality. It exists because a consumer tiling adjacent intervals may need
+    to know that a crossing sits precisely on a shared boundary. No calendar
+    ownership is implied, asserted or available from here.
+
+    ``kernel`` is the pinned NASA/JPL artifact the search actually ran under.
+    It is computation provenance, not a routing decision, and it is single
+    because the frontier is single.
+
+    No sunset state appears on this record, deliberately. Named fields, not a
+    tuple: no call site can unpack a count positionally, so a later change to
+    field order cannot silently transpose the bounds or the flags.
+    """
+
+    count: int
+    requested_lo: float
+    requested_hi: float
+    covered_lo: float
+    covered_hi: float
+    complete: bool
+    truncation_reason: str | None
+    boundary_coincident: bool
+    kernel: str
+
+
+def count_sunsets_in_interval(tt_lo, tt_hi, latitude, longitude):
+    """Return how many genuine sunsets lie in ``tt_lo`` < sunset <= ``tt_hi``.
+
+    Both bounds are exact binary64 Terrestrial Time states. Neither need be a
+    sunset, and neither is moved.
+
+    Returns a SunsetCount. Absence of sunsets is reported as a count of zero
+    over a complete frontier, never as a failure.
+
+    Fails closed, preserving the substrate's own stable reason, when either
+    bound is malformed, the interval is reversed or zero-width, the observer
+    lies outside the governed geodetic domain, or authoritative coverage or
+    computational reach ends before any territory exists at all. Fails closed
+    with its own reason when the requested span exceeds the governed
+    admission bound.
+
+    NO ASTRONOMY IS DECIDED HERE. Which artifact may answer, over exactly what
+    interval, is asked of the published frontier substrate and used exactly as
+    given. Observer validation, declared certified coverage, computation
+    evaluability, governed precedence, lower-bound immobility and contiguity
+    of the examined territory all belong to it, and none of them is
+    re-derived, re-checked against a second artifact, or worked around.
+
+    No HTTP semantics are decided here.
+    """
+    lo = _exact_finite_tt(tt_lo, "interval start tt")
+    hi = _exact_finite_tt(tt_hi, "interval end tt")
+
+    # Reversed and zero-width are both refused, by one comparison. An interval
+    # that does not ascend contains no territory to count over, and treating
+    # either case as an empty count would report a scientific answer for a
+    # question that was never well formed.
+    if not lo < hi:
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SUNSET COUNT INTERVAL INVALID - the interval TT %r .. %r does "
+            "not ascend, so it bounds no territory to count over"
+            % (lo, hi),
+        )
+
+    # Admission is decided on the exact states, before any artifact is opened
+    # and before any sample is laid down, so a refused span costs no
+    # astronomy. The comparison is a difference of two Terrestrial Time
+    # values against a Terrestrial Time bound - no civil date, no calendar
+    # year and no nominal day participates.
+    #
+    # This runs BEFORE observer validation, which belongs to the substrate and
+    # is not duplicated here. A request that is both too long and malformed in
+    # its observer therefore reports the span, which is the condition that
+    # would have been refused first in any case.
+    if hi - lo > COUNT_MAX_SPAN_DAYS:
+        raise SunsetChronologyError(
+            REASON_COUNT_INTERVAL_TOO_LONG,
+            "SUNSET COUNT INTERVAL TOO LONG - the requested interval TT %r "
+            ".. %r spans %r days, and one count operation admits at most %r"
+            % (lo, hi, hi - lo, COUNT_MAX_SPAN_DAYS),
+        )
+
+    frontier = supported_search_frontier(lo, hi, latitude, longitude)
+
+    is_sun_up = almanac.sunrise_sunset(
+        load_kernel(frontier.kernel), wgs84.latlon(latitude, longitude)
+    )
+
+    # The frontier was admitted by probing this same computation at both of
+    # its endpoints, so a failure in here is not expected. If one occurs the
+    # examined territory is no longer whole, and the only honest response is
+    # to fail closed: the frontier is never abandoned for another artifact,
+    # never resumed past the failure, and never stitched to a second
+    # interval, because any of those would answer a different question.
+    try:
+        times, events = almanac.find_discrete(
+            ts.tt_jd(frontier.tt_lo), ts.tt_jd(frontier.tt_hi), is_sun_up
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no count is "
+            "reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    count = 0
+    boundary_coincident = False
+
+    for t, sun_is_up in zip(times, events):
+        if bool(sun_is_up):
+            continue
+
+        event_tt = float(t.tt)
+
+        # The half-open contract, applied to the territory actually examined.
+        # The root finder reports only inside the interval it was given, so
+        # neither comparison is expected to exclude anything; they are stated
+        # rather than assumed because the contract is the point.
+        if not (frontier.tt_lo < event_tt <= frontier.tt_hi):
+            continue
+
+        count += 1
+
+        # Exact binary64 equality against the state the CALLER asked for, not
+        # against the frontier. A truncated frontier ends below the requested
+        # bound, so no crossing inside it can coincide with that bound, and
+        # this correctly stays False.
+        if event_tt == hi:
+            boundary_coincident = True
+
+    return SunsetCount(
+        count=count,
+        requested_lo=lo,
+        requested_hi=hi,
+        covered_lo=frontier.tt_lo,
+        covered_hi=frontier.tt_hi,
+        complete=frontier.complete,
+        truncation_reason=frontier.truncation_reason,
+        boundary_coincident=boundary_coincident,
+        kernel=frontier.kernel,
+    )
