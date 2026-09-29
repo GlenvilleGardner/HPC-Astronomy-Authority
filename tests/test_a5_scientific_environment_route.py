@@ -680,12 +680,24 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
                 self.assertIn(path, routes)
                 self.assertEqual(routes[path][1], endpoint)
 
+    # Application routes added by governed increments AFTER A5.
+    #
+    # A5's closed-world claim is about the surface AS OF A5: that this
+    # increment added exactly one route. A later additive increment does not
+    # weaken that claim, but it does make an unqualified count of the whole
+    # application factually wrong. Subtracting the later additions keeps the
+    # claim exactly as strong as it was while letting it stay true.
+    #
+    # Each entry is owned by the increment that added it, and its own suite
+    # owns the closed world as of that increment.
+    POST_A5_ROUTES = frozenset({"/earth-rotation"})
+
     def test_exactly_one_route_was_added(self):
         routes = registered_routes()
         published = {
             path for path in routes
             if not path.startswith(("/openapi", "/docs", "/redoc"))
-        }
+        } - self.POST_A5_ROUTES
 
         self.assertEqual(published - set(self.PREVIOUS), {ENVIRONMENT_PATH})
 

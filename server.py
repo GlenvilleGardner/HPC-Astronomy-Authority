@@ -57,6 +57,10 @@ from scientific_provenance import (  # noqa: E402 - gate runs first
     establish_scientific_provenance,
     scientific_provenance,
 )
+from earth_rotation import (  # noqa: E402 - deliberate: gate runs first
+    EarthRotationError,
+    earth_rotation_evidence,
+)
 
 # Establish this process's scientific identity before it can serve anything.
 #
@@ -1147,3 +1151,71 @@ def scientific_environment():
     was established before this route became reachable.
     """
     return scientific_provenance()
+
+
+# ---------------------------------------------------------------------------
+# PTC-I1 - Earth rotation evidence route.
+#
+# WHAT THIS PUBLISHES
+#
+# The time-scale and Earth-orientation quantities this certified runtime has
+# always been able to establish, exposed for the first time: UT1, Delta T,
+# UT1-UTC where it is meaningful, and the Earth Rotation Angle under a named
+# convention, each with the provenance of the source that actually produced it.
+#
+# WHY IT TAKES NO OBSERVER
+#
+# Earth Rotation Angle is a property of the Earth's orientation as a body and
+# carries no observer term. Accepting a latitude or longitude would suggest one
+# were required, and at the exact geographic poles no unique meridian exists to
+# supply. The scientific question this route answers genuinely has no observer
+# in it.
+#
+# WHAT IT DOES NOT PUBLISH
+#
+# No mean-solar phase, no continuity cell, no cell ordinal, no day count and no
+# calendar position of any kind. Deriving a local phase requires a convention
+# about where a day begins and, away from the poles, a meridian - neither of
+# which this Authority owns. UT1 is published instead, and the arithmetic is
+# the consumer's, carrying the consumer's conventions openly.
+#
+# ADDITIVE
+#
+# No existing route is touched and no astronomical contract changes.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/earth-rotation")
+def earth_rotation(ttBits: str):
+    """Return the Earth-rotation evidence for an exact Terrestrial Time state.
+
+    ``ttBits`` is the IEEE-754 spelling of the exact binary64 Terrestrial Time
+    anchor, identical to every other exact route. It is arbitrary: it need not
+    be an event and need not lie near one. No observer is accepted, because the
+    published quantities do not have one.
+
+    Returns the requested instant in the standard exact projection, together
+    with ``ut1JulianDate``, ``deltaTSeconds``, ``dut1Seconds``,
+    ``eraRotations``, the governing ``rotationConvention`` and the provenance
+    regime of each derived quantity. ``dut1Seconds`` is null outside the pinned
+    table's span, where UT1-UTC is extrapolation arithmetic rather than an
+    Earth-orientation measurement.
+
+    Fails closed with HTTP 400 carrying a stable reason, either for a malformed
+    anchor or for a state the certified time-scale model cannot evaluate.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        return earth_rotation_evidence(anchor)
+    except EarthRotationError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error

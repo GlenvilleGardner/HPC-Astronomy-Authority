@@ -1283,6 +1283,7 @@ class TestExistingContractsUnchanged(unittest.TestCase):
     # owns the closed world as of that increment.
     POST_A3C3_ROUTES = frozenset({
         "/sunset-event-after", "/sunset-count", "/scientific-environment",
+        "/earth-rotation",
     })
 
     def test_every_preexisting_route_is_registered_unchanged(self):

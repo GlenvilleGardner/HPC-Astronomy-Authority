@@ -874,7 +874,9 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     # weaken that claim, but it does make an unqualified count of the whole
     # application factually wrong. Subtracting the later additions keeps the
     # claim exactly as strong as it was while letting it stay true.
-    POST_A4_ROUTES = frozenset({"/scientific-environment"})
+    POST_A4_ROUTES = frozenset({
+        "/scientific-environment", "/earth-rotation",
+    })
 
     def test_exactly_one_route_was_added(self):
         routes = registered_routes()

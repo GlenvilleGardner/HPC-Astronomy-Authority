@@ -166,6 +166,7 @@ POST_A3C2_ROUTES = frozenset({
     "/sunset-event-after",
     "/sunset-count",
     "/scientific-environment",
+    "/earth-rotation",
 })
 
 
