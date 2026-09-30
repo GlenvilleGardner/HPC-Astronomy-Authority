@@ -4,11 +4,16 @@ from collections import namedtuple
 from dataclasses import dataclass
 from functools import lru_cache
 from datetime import datetime, timezone, timedelta
+import numpy
 from skyfield.api import load, wgs84
 from skyfield import almanac
 from skyfield.errors import EphemerisRangeError
+from skyfield.nutationlib import iau2000b_radians
 
-from scientific_environment import ScientificEnvironmentError
+from scientific_environment import (
+    EPHEMERIS_ROLES,
+    ScientificEnvironmentError,
+)
 
 PRIMARY_KERNEL = os.getenv("HPC_EPHEMERIS_PRIMARY", "de440.bsp")
 ANCIENT_KERNEL = os.getenv("HPC_EPHEMERIS_ANCIENT", "de441_part-1.bsp")
@@ -3174,4 +3179,545 @@ def count_sunsets_in_interval(tt_lo, tt_hi, latitude, longitude):
         truncation_reason=frontier.truncation_reason,
         boundary_coincident=boundary_coincident,
         kernel=frontier.kernel,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PTC-I2 - certified solar regime and event-absence evidence.
+#
+# THE QUESTION THIS ANSWERS
+#
+# Over one explicitly declared interval, for one observer: does the certified
+# apparent solar threshold get crossed at all, and if not, which side of it
+# does the Sun stay on?
+#
+# WHY THAT IS NOT ALREADY ANSWERED
+#
+# Every existing sunset route answers "when", and each does so inside a
+# bounded search. /sunset-event-after reaches SUCCESSOR_SEARCH_SPAN_DAYS and
+# no further, so a polar observer whose next genuine sunset is months away
+# gets no event - and that silence is a statement about the HORIZON, not
+# about the sky. Nothing in this Authority has been able to say "no crossing
+# occurs here, and this is the territory that claim covers".
+#
+# A count of zero from count_sunsets_in_interval comes closer, but it is not
+# sufficient either, for a reason established by measurement rather than
+# assumption. The certified root finder lays its initial samples
+# step_days = 0.04 apart (57.6 minutes). Where the Sun grazes the threshold -
+# the transition band near 65.7 degrees north in 2026 - a sunset and the
+# following sunrise can both fall inside ONE of those samples, presenting no
+# sign change and leaving the pair undiscovered. Measured over thirty
+# midsummer days at 65.7 degrees north, the root finder reports six crossings
+# where sixty exist. The enumeration is sound where crossings are ordinary
+# and phase-dependent where they graze, so its zero cannot carry the weight
+# of a certified absence on its own.
+#
+# HOW ABSENCE IS CERTIFIED INSTEAD
+#
+# By reading the certified predicate's own continuous quantity instead of
+# only its sign. almanac.sunrise_sunset compares the apparent topocentric
+# altitude of the Sun's centre against a fixed threshold; the difference
+# between the two is sampled here on a declared grid, and two elementary
+# facts are used:
+#
+#   EXISTENCE. A sign change between adjacent samples proves a crossing
+#   lies between them. The margin is continuous in time, so this is the
+#   intermediate value theorem and needs no tolerance.
+#
+#   ABSENCE. If the margin at every sample exceeds a guard equal to half the
+#   grid step times an upper bound on the margin's rate of change, no zero
+#   can lie between any two samples. Reaching zero from a sample whose
+#   margin exceeds that guard would require the margin to travel further in
+#   half a step than its rate permits.
+#
+# THE RATE BOUND, AND WHY IT HOLDS
+#
+# The bound is
+#
+#   |d(margin)/dt| <= ROTATION * |cos(latitude)| + DRIFT
+#
+# and it is a DERIVED conservative bound on the exact quantity the certified
+# predicate computes - apparent topocentric altitude of the Sun's centre, with
+# no refraction applied - not a fit to observed rates. Every step below is an
+# upper bound, and each is stated so it can be checked rather than believed.
+#
+#   sin h = sin(phi) sin(dec) + cos(phi) cos(dec) cos(H)
+#
+#   cos(h) dh/dt = (d dec/dt) [sin(phi) cos(dec) - cos(phi) sin(dec) cos(H)]
+#                  - (dH/dt) cos(phi) cos(dec) sin(H)
+#
+# ROTATION TERM. |cos(phi) cos(dec) sin(H)| <= |cos(phi)|, and H = theta - RA
+# so dH/dt is the sidereal rotation rate minus the Sun's own right ascension
+# rate. That rate is always POSITIVE for the Sun, so it can only subtract:
+# |dH/dt| <= 360.9856 degrees per day, with no further assumption. Tidal
+# change in the rotation rate across the whole supported artifact span moves
+# this by under 0.002 degrees per day, and expressing it per Terrestrial Time
+# day rather than per UT1 day moves it by under 0.001.
+#
+# DECLINATION TERM. sin(dec) = sin(eps) sin(lambda), so |d dec/dt| <=
+# sin(eps) |d lambda/dt|. Across the supported span the obliquity stays below
+# 24.5 degrees and the eccentricity below 0.02, giving sin(eps) <= 0.4147 and
+# |d lambda/dt| <= 1.026 degrees per day, hence |d dec/dt| <= 0.4255. Its
+# bracket is amplified by at most |sin(phi)| + sin(eps)|cos(phi)| <=
+# sqrt(1 + sin(eps)^2) = 1.0825, so the declination contribution is at most
+# 0.4606 degrees per day.
+#
+# TOPOCENTRIC PARALLAX. The computation is topocentric, so the solar
+# horizontal parallax of 8.794 arcseconds displaces the Sun by that much and
+# the displacement turns once per day: at most 0.0154 degrees per day. This
+# term is ABSENT from the spherical identity above, which is geocentric, and
+# must be added explicitly rather than assumed negligible - it is three per
+# cent of the declination term, not orders of magnitude below it.
+#
+# APPARENT-PLACE TERMS. Annual aberration is 20.5 arcseconds turning at about
+# 1 degree per day (under 0.0002 degrees per day); diurnal aberration is 0.32
+# arcseconds turning once per day (under 0.0006); nutation and light-time are
+# smaller again and largely common to the Sun and to the observer's zenith.
+# Together under 0.002 degrees per day. NO REFRACTION TERM EXISTS: altaz() is
+# called without a temperature, so no refraction model runs at all and the 34
+# arcminutes live inside the fixed threshold instead.
+#
+# THE 1/cos(h) FACTOR. It is needed only where the absence argument needs it -
+# on the path from a sample down to a hypothetical zero, where the margin lies
+# between zero and the guard. The guard is at most ROTATION * step / 2 = 1.85
+# degrees, so h stays inside [-0.84, +1.03] degrees and cos(h) >= 0.99984. The
+# factor is therefore at most 1.00016, and the argument closes on itself: the
+# guard bounds the window that bounds the rate that sets the guard. The
+# singularities of this factor are at the zenith and the nadir, which that
+# window never approaches.
+#
+# COMPOSITE. (360.9856 |cos(phi)| + 0.4606 + 0.0154 + 0.002) * 1.00016
+#          <= 361.04 |cos(phi)| + 0.4783
+#
+# against the constants below, 370 |cos(phi)| + 1.0. Both coefficients
+# dominate term by term and both terms are non-negative, so the published
+# bound exceeds the derived one at every latitude: two and a half per cent of
+# headroom on the rotation coefficient, a factor of 2.1 on the constant.
+#
+# MEASURED CORROBORATION, NOT DERIVATION. Against the certified runtime the
+# closest approach is a factor of 1.030, at the equator, exactly where the
+# derivation says the tightest case must be. The sub-bounds check out
+# individually - declination rate 0.397 against 0.4255, hour-angle rate 360.11
+# against 360.9856, parallax rate 0.0155 of the same order as 0.0154 - and the
+# bound holds at the equator, at both poles and between them, from 3000 BCE to
+# 15000 CE across all three pinned artifacts.
+#
+# WHY DRIFT SURVIVES AT THE POLE. There cos(phi) is zero, the zenith is the
+# rotation axis and does not turn, the parallax displacement stops turning
+# with it, and the Sun's altitude IS its declination. Everything but the
+# declination drift disappears, so the whole of the motion is bounded by
+# 0.4783 degrees per day and a polar regime is certified with a guard of five
+# thousandths of a degree. A transition-latitude regime is held to a guard
+# near one degree instead - not because latitude was consulted as a rule, but
+# because that is how fast the Sun actually moves there.
+#
+# WHAT MARGINAL MEANS, AND WHY IT IS NOT AVOIDED
+#
+# Where no sign change appears but the margin does not clear the guard, this
+# module reports MARGINAL and states no regime. That is the honest outcome at
+# 66.0 degrees north in midsummer, where the Sun's lowest point sits 0.22
+# degrees above the threshold and the declared resolution cannot exclude a
+# grazing dip. Collapsing that into continuous daylight would be a claim the
+# evidence does not support, and it would be exactly the claim a consumer
+# most needs not to be told.
+#
+# NO LATITUDE RULE EXISTS HERE. Latitude enters once, as the rate bound that
+# sets the guard. No threshold latitude is compared, no polar circle is
+# consulted, and no observer is classified before the astronomy is run.
+#
+# WHAT IS NOT DECIDED HERE
+#
+# No event is synthesized, interpolated or named. A crossing detected by the
+# grid is evidence that a genuine event exists, not an event: its instant
+# belongs to the published directional routes, which determine it with the
+# certified root finder and nothing else. No HPC year, month, day, Telma,
+# Creation week, Sabbath, continuity interval or retained phase appears, and
+# no calendar meaning is produced from a regime.
+# ---------------------------------------------------------------------------
+
+REASON_REGIME_INTERVAL_TOO_LONG = "REGIME_INTERVAL_TOO_LONG"
+
+# One or more genuine threshold crossings lie in the declared interval.
+REGIME_ORDINARY = "ORDINARY"
+
+# The Sun stays above the certified threshold for the whole declared interval.
+REGIME_CONTINUOUS_DAYLIGHT = "CONTINUOUS_DAYLIGHT"
+
+# The Sun stays below the certified threshold for the whole declared interval.
+REGIME_CONTINUOUS_DARKNESS = "CONTINUOUS_DARKNESS"
+
+# No crossing was found, and the geometry lies too close to the threshold for
+# the declared resolution to exclude one.
+REGIME_MARGINAL = "MARGINAL"
+
+# No crossing was found, and the examined territory was not the whole declared
+# interval, so nothing can be claimed about the part that was never examined.
+REGIME_INDETERMINATE = "INDETERMINATE"
+
+# The altitude the certified predicate compares against, in degrees.
+#
+# This is almanac.sunrise_sunset's own literal, not a re-derivation of it: the
+# United States Naval Observatory convention places sunrise and sunset where
+# the Sun's CENTRE is 0.8333 degrees below the horizon, which is 16 arcminutes
+# of apparent solar semidiameter and 34 arcminutes of mean atmospheric
+# refraction combined into one constant. Neither is modelled separately, and
+# no observer elevation or terrain participates.
+#
+# Written here rather than imported because the library states it as a literal
+# inside a closure, where nothing can import it. It cannot drift silently: the
+# A0.3 runtime gate pins CERTIFIED_SKYFIELD_VERSION, so the closure this
+# mirrors cannot change without the certified runtime failing to start, and a
+# certification test asserts sign agreement against the predicate itself
+# rather than trusting this constant.
+EVENT_THRESHOLD_DEGREES = -0.8333
+
+# The event definition, carried on the wire so a consumer never has to infer
+# which sunrise or sunset the Authority means.
+EVENT_CONVENTION = (
+    "USNO apparent sunrise/sunset: the Sun's centre at -0.8333 degrees "
+    "apparent topocentric altitude, combining 16 arcminutes of solar "
+    "semidiameter with 34 arcminutes of mean refraction; sea-level observer, "
+    "no terrain"
+)
+
+# The declared spacing of the altitude-margin grid, in Terrestrial Time days.
+#
+# 0.01 days is 14.4 minutes. It is a DECLARED RESOLUTION, not a tolerance and
+# not an event-identity gap: it sets the guard, and the guard sets how close
+# to the threshold a regime may sit before this module declines to classify
+# it. A finer grid would certify more geometries and cost proportionally more;
+# a coarser one would refuse more. This value certifies the polar regimes with
+# three orders of magnitude of margin to spare and still holds a
+# transition-latitude geometry to better than a degree.
+#
+# It is published with every answer, so a classification can never be read
+# without the resolution it was made at.
+REGIME_SAMPLE_STEP_DAYS = 0.01
+
+# The widest interval one regime determination will admit, in Terrestrial Time
+# days.
+#
+# A RESOURCE ADMISSION BOUND, NOT A SCIENTIFIC ONE, exactly as
+# COUNT_MAX_SPAN_DAYS is. The astronomy is correct for any interval; the cost
+# is not, and here it is paid twice - once laying the margin grid and once
+# running the certified root finder over the same territory.
+#
+# It carries the same value as the count bound because it answers the same
+# question about the same consumer: the widest interval a caller can
+# legitimately need is a whole year, and a polar regime occupies at most half
+# of one. The two constants are deliberately separate rather than shared, so
+# that changing what one route admits cannot silently change the other.
+REGIME_MAX_SPAN_DAYS = 400.0
+
+# Upper bound on the apparent solar altitude rate, in degrees per day, as
+# ROTATION * |cos(latitude)| + DRIFT. The derivation is in the block header
+# above; these are the two numbers it produces, each rounded up.
+#
+# ROTATION covers the Earth's rotation term: at most 360.9856 degrees per day,
+# scaled by |cos(latitude)| and lifted by the 1/cos(h) factor across the widest
+# guard this step can produce, giving 361.04.
+#
+# DRIFT covers everything that does not scale with rotation, at most 0.4783
+# degrees per day: the solar declination rate through its amplifying bracket
+# (0.4606), topocentric parallax turning once per day (0.0154), and aberration,
+# nutation and light-time together (0.002). It is what survives at the poles,
+# where it is the whole of the motion.
+#
+# NEITHER CONSTANT MAY BE LOWERED to make a geometry classifiable. Lowering
+# either shrinks the guard, and the guard is the whole of the absence proof.
+ALTITUDE_RATE_ROTATION_DEG_PER_DAY = 370.0
+ALTITUDE_RATE_DRIFT_DEG_PER_DAY = 1.0
+
+# Which pinned artifact a kernel filename plays the role of.
+#
+# The role is published; the filename is not. A consumer that needs the
+# artifact's identity resolves the role through the published scientific
+# environment, which names it with its content digest. That keeps artifact
+# provenance intact on this contract without putting a filename on the wire.
+#
+# Validated against the published role vocabulary at import rather than
+# trusted: a renamed role would otherwise surface as a regime answer carrying
+# provenance no consumer could resolve.
+_EPHEMERIS_ROLE_BY_KERNEL = {
+    PRIMARY_KERNEL: "primary",
+    ANCIENT_KERNEL: "ancient",
+    FUTURE_KERNEL: "future",
+}
+
+if set(_EPHEMERIS_ROLE_BY_KERNEL.values()) != set(EPHEMERIS_ROLES):
+    raise ScientificEnvironmentError(
+        "SOLAR REGIME PROVENANCE UNCERTIFIED - the ephemeris roles this "
+        "module can report %r are not the published role vocabulary %r"
+        % (sorted(set(_EPHEMERIS_ROLE_BY_KERNEL.values())),
+           sorted(EPHEMERIS_ROLES))
+    )
+
+
+@dataclass(frozen=True)
+class SolarRegime:
+    """What the certified apparent solar threshold does over one interval.
+
+    ``regime`` is the classification, one of the five published names. It is a
+    statement about the DECLARED INTERVAL and about nothing wider: a three-day
+    interval in polar night is continuous darkness, and that is not a claim
+    that the Sun never rises.
+
+    ``crossing_present`` is True when a crossing is proven to exist, False
+    when absence is certified over the whole declared interval, and None when
+    the Authority cannot establish which. The three states are distinct on
+    purpose - a consumer must never have to read False where the honest answer
+    is "unknown".
+
+    ``sunsets`` and ``sunrises`` come from the certified root finder over the
+    examined frontier, the same machinery every published sunset route uses.
+    ``enumeration_agrees`` is True only when that enumeration found exactly as
+    many crossings as the margin grid proves exist; where it is False the two
+    counts are a LOWER BOUND, because grazing crossings shorter than the root
+    finder's initial sampling can escape it.
+
+    ``requested_lo`` and ``requested_hi`` are the caller's own exact binary64
+    states, carried through unaltered. ``covered_lo`` and ``covered_hi`` are
+    the frontier actually examined; they differ only when authoritative
+    coverage or evaluable reach ran out first, and the lower bound never
+    moves.
+
+    ``complete`` is True only when the covered frontier is the entire
+    requested interval, and ``truncation_reason`` is None exactly then. The
+    two together are what stop a regime determined over part of an interval
+    from being read as a regime of the whole.
+
+    ``minimum_margin_degrees`` and ``maximum_margin_degrees`` are the extremes
+    of apparent altitude above the certified threshold across the grid. They
+    are the evidence the classification rests on, published so it can be
+    audited rather than believed.
+
+    ``guard_degrees`` is how far from the threshold the geometry had to stay
+    for continuity to be certifiable at ``step_days``. A margin inside it
+    yields MARGINAL.
+
+    NO OBSERVER APPEARS ON THIS RECORD, deliberately. The observer governed
+    the search and is known to the caller that supplied it; binding it into a
+    transportable record would create a second, unchecked place where an
+    observer binding could drift from the one the geometry actually ran on.
+    That rule is the repository's, stated at the sunset bracket, and a regime
+    is no more entitled to an exception than a bracket is.
+
+    ``event_threshold_degrees`` and ``event_convention`` name the event the
+    regime is about. They travel with the answer rather than being looked up
+    beside it, so a regime can never be read against the wrong predicate.
+
+    ``ephemeris_role`` is the role of the pinned NASA/JPL artifact the
+    determination ran under. No filename appears.
+
+    Named fields, deliberately not a tuple: no call site can unpack a regime
+    positionally, so a later change to field order cannot transpose the bounds
+    or invert a flag.
+    """
+
+    regime: str
+    crossing_present: bool | None
+    sunsets: int
+    sunrises: int
+    enumeration_agrees: bool
+    requested_lo: float
+    requested_hi: float
+    covered_lo: float
+    covered_hi: float
+    complete: bool
+    truncation_reason: str | None
+    minimum_margin_degrees: float
+    maximum_margin_degrees: float
+    guard_degrees: float
+    step_days: float
+    event_threshold_degrees: float
+    event_convention: str
+    ephemeris_role: str
+
+
+def altitude_rate_bound_degrees_per_day(latitude):
+    """Upper bound on how fast the apparent solar altitude margin can move.
+
+    See the block header for the derivation. Latitude enters the regime
+    determination here and nowhere else, as a rate rather than a rule.
+
+    At the exact poles the cosine is a float64 residue near 6e-17 rather than
+    zero, which is harmless: the rotation term vanishes to nothing beside the
+    drift term, which is the whole of the motion there.
+    """
+    return (
+        ALTITUDE_RATE_ROTATION_DEG_PER_DAY
+        * abs(math.cos(math.radians(latitude)))
+        + ALTITUDE_RATE_DRIFT_DEG_PER_DAY
+    )
+
+
+def _altitude_margin_degrees(kernel_name, grid, latitude, longitude):
+    """Sample the certified predicate's own quantity across ``grid``.
+
+    This is the identical computation inside almanac.sunrise_sunset's
+    is_sun_up_at - the same topocentric observer, the same apparent place, the
+    same nutation assignment, the same altitude - read as a number instead of
+    reduced to a sign, and offset by the threshold that predicate compares
+    against. Nothing about the event definition is re-derived, and a
+    certification test asserts the sign of what comes back matches the
+    predicate itself.
+    """
+    ephemeris = load_kernel(kernel_name)
+    observe_at = (ephemeris["earth"] + wgs84.latlon(latitude, longitude)).at
+    instants = ts.tt_jd(grid)
+    instants._nutation_angles_radians = iau2000b_radians(instants)
+    altitude = (
+        observe_at(instants).observe(ephemeris["sun"]).apparent().altaz()[0]
+    )
+
+    return numpy.asarray(altitude.degrees) - EVENT_THRESHOLD_DEGREES
+
+
+def determine_solar_regime(tt_lo, tt_hi, latitude, longitude):
+    """Return the certified solar regime over ``tt_lo`` .. ``tt_hi``.
+
+    Both bounds are exact binary64 Terrestrial Time states. Neither need be an
+    event, and neither is moved. The interval is closed: the grid includes both
+    endpoints, because a regime is a statement about territory rather than a
+    count of crossings inside a half-open window.
+
+    Returns a SolarRegime. Absence of crossings over a complete frontier is
+    reported as a certified continuous regime, never as a failure; geometry too
+    near the threshold to classify is reported as MARGINAL; a frontier that ran
+    out before the requested bound and contained no crossing is reported as
+    INDETERMINATE rather than as absence.
+
+    Fails closed, preserving the substrate's own stable reason, when either
+    bound is malformed, the interval is reversed or zero-width, the observer
+    lies outside the governed geodetic domain, or authoritative coverage or
+    computational reach ends before any territory exists at all. Fails closed
+    with its own reason when the requested span exceeds the governed admission
+    bound.
+
+    NO ASTRONOMY IS DECIDED HERE beyond the classification itself. Which
+    artifact may answer, over exactly what interval, is asked of the published
+    frontier substrate and used exactly as given; observer validation, declared
+    coverage, evaluability, precedence, lower-bound immobility and contiguity
+    all belong to it and none is re-derived.
+
+    No HTTP semantics are decided here.
+    """
+    lo = _exact_finite_tt(tt_lo, "interval start tt")
+    hi = _exact_finite_tt(tt_hi, "interval end tt")
+
+    # Reversed and zero-width are both refused by one comparison, exactly as
+    # the count solver refuses them. An interval that does not ascend bounds no
+    # territory, and reporting a regime for it would answer a question that was
+    # never well formed. The frontier substrate is directional and would
+    # silently accept a reversed pair, so this cannot be delegated.
+    if not lo < hi:
+        raise SunsetChronologyError(
+            REASON_INSTANT_STATE_INVALID,
+            "SOLAR REGIME INTERVAL INVALID - the interval TT %r .. %r does "
+            "not ascend, so it bounds no territory to classify"
+            % (lo, hi),
+        )
+
+    # Admission is decided on the exact states, before any artifact is opened
+    # and before any sample is laid down, so a refused span costs no astronomy.
+    if hi - lo > REGIME_MAX_SPAN_DAYS:
+        raise SunsetChronologyError(
+            REASON_REGIME_INTERVAL_TOO_LONG,
+            "SOLAR REGIME INTERVAL TOO LONG - the requested interval TT %r "
+            ".. %r spans %r days, and one regime determination admits at "
+            "most %r"
+            % (lo, hi, hi - lo, REGIME_MAX_SPAN_DAYS),
+        )
+
+    frontier = supported_search_frontier(lo, hi, latitude, longitude)
+
+    # The grid spans the frontier endpoint to endpoint, so its actual spacing
+    # is at most the declared step and the guard is computed from what was
+    # really laid down rather than from what was asked for.
+    sample_count = int(
+        (frontier.tt_hi - frontier.tt_lo) / REGIME_SAMPLE_STEP_DAYS
+    ) + 2
+    grid = numpy.linspace(frontier.tt_lo, frontier.tt_hi, sample_count)
+    step_days = (frontier.tt_hi - frontier.tt_lo) / (sample_count - 1)
+    guard_degrees = (
+        altitude_rate_bound_degrees_per_day(latitude) * step_days / 2.0
+    )
+
+    is_sun_up = almanac.sunrise_sunset(
+        load_kernel(frontier.kernel), wgs84.latlon(latitude, longitude)
+    )
+
+    # The frontier was admitted by probing this same computation at both of its
+    # endpoints, so a failure in either pass is not expected. If one occurs the
+    # examined territory is no longer whole, and the only honest response is to
+    # fail closed: the frontier is never abandoned for another artifact, never
+    # resumed past the failure and never stitched to a second interval, because
+    # any of those would answer a different question.
+    try:
+        margin = _altitude_margin_degrees(
+            frontier.kernel, grid, latitude, longitude
+        )
+        times, events = almanac.find_discrete(
+            ts.tt_jd(frontier.tt_lo), ts.tt_jd(frontier.tt_hi), is_sun_up
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r; "
+            "the examined territory is not whole, so no regime is reported"
+            % (frontier.tt_lo, frontier.tt_hi),
+        ) from error
+
+    sunsets = sum(1 for is_up in events if not bool(is_up))
+    sunrises = sum(1 for is_up in events if bool(is_up))
+
+    # Existence by the intermediate value theorem: the margin is continuous in
+    # time, so a sign change between adjacent samples is a crossing, proven
+    # without tolerance. This is an INDEPENDENT detector from the root finder
+    # above, and the two are compared rather than one trusted.
+    above = margin >= 0.0
+    grid_crossings = int(numpy.count_nonzero(above[:-1] != above[1:]))
+
+    minimum_margin = float(margin.min())
+    maximum_margin = float(margin.max())
+
+    if sunsets + sunrises or grid_crossings:
+        regime = REGIME_ORDINARY
+        crossing_present = True
+    elif not frontier.complete:
+        # Nothing was found, but not all of the declared interval was looked
+        # at. Reporting absence here would be the precise error this contract
+        # exists to prevent.
+        regime = REGIME_INDETERMINATE
+        crossing_present = None
+    elif minimum_margin > guard_degrees:
+        regime = REGIME_CONTINUOUS_DAYLIGHT
+        crossing_present = False
+    elif maximum_margin < -guard_degrees:
+        regime = REGIME_CONTINUOUS_DARKNESS
+        crossing_present = False
+    else:
+        regime = REGIME_MARGINAL
+        crossing_present = None
+
+    return SolarRegime(
+        regime=regime,
+        crossing_present=crossing_present,
+        sunsets=sunsets,
+        sunrises=sunrises,
+        enumeration_agrees=(sunsets + sunrises == grid_crossings),
+        requested_lo=lo,
+        requested_hi=hi,
+        covered_lo=frontier.tt_lo,
+        covered_hi=frontier.tt_hi,
+        complete=frontier.complete,
+        truncation_reason=frontier.truncation_reason,
+        minimum_margin_degrees=minimum_margin,
+        maximum_margin_degrees=maximum_margin,
+        guard_degrees=guard_degrees,
+        step_days=step_days,
+        event_threshold_degrees=EVENT_THRESHOLD_DEGREES,
+        event_convention=EVENT_CONVENTION,
+        ephemeris_role=_EPHEMERIS_ROLE_BY_KERNEL[frontier.kernel],
     )

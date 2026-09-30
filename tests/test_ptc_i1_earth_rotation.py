@@ -450,6 +450,18 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
                 self.assertIn(path, routes)
                 self.assertEqual(routes[path][1], name)
 
+    # Application routes added by governed increments AFTER PTC-I1.
+    #
+    # PTC-I1's closed-world claim is about the surface AS OF PTC-I1: that this
+    # increment added exactly one route. A later additive increment does not
+    # weaken that claim, but it does make an unqualified count of the whole
+    # application factually wrong. Subtracting the later additions keeps the
+    # claim exactly as strong as it was while letting it stay true.
+    #
+    # Each entry is owned by the increment that added it, and its own suite
+    # owns the closed world as of that increment.
+    POST_PTC_I1_ROUTES = frozenset({"/solar-regime"})
+
     def test_this_increment_added_exactly_one_route(self):
         routes = registered_routes()
 
@@ -461,7 +473,7 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
         published = {
             path for path in routes
             if not path.startswith(("/openapi", "/docs", "/redoc"))
-        }
+        } - self.POST_PTC_I1_ROUTES
 
         added = published - set(self.PREVIOUS)
 

@@ -263,3 +263,101 @@ def project_sunset_count(record):
         "boundaryCoincident": record.boundary_coincident,
         "kernel": record.kernel,
     }
+
+
+def project_solar_regime(record):
+    """Return the wire projection of a certified solar regime determination.
+
+    ``record`` is a published SolarRegime. Its classification, its bounds, its
+    completeness, its evidence and its artifact role are carried through
+    unchanged; nothing is recomputed, reinterpreted or renamed, and the record
+    itself is not modified.
+
+    THREE ANSWERS, NEVER TWO
+
+    ``crossingPresent`` is the field this whole contract exists for. True
+    means a crossing is proven to lie in the declared interval. False means
+    absence is certified across the whole of it. Null means the Authority
+    cannot establish which - because the geometry sits inside the resolution
+    guard, or because the examined territory was not the whole interval.
+
+    A consumer must be able to distinguish those three, because collapsing the
+    third into the second is exactly how a bounded search gets mistaken for an
+    empty sky. ``regime`` names which of the five cases produced the answer,
+    and ``complete`` with ``truncationReason`` says whether the territory was
+    whole.
+
+    EVIDENCE, NOT JUST A VERDICT
+
+    ``minimumAltitudeMarginDegrees`` and ``maximumAltitudeMarginDegrees`` are
+    how far the Sun's apparent altitude stayed from the certified threshold at
+    its extremes, and ``resolutionGuardDegrees`` is how far it had to stay for
+    continuity to be certifiable at ``sampleStepDays``. Published together
+    they let a consumer see how near the call was, and let an auditor rederive
+    the classification instead of believing it.
+
+    ``eventThresholdDegrees`` and ``eventConvention`` name the event itself.
+    Without them a regime is a verdict about an unstated predicate.
+
+    NO EVENT IDENTITY
+
+    No crossing, no root and no instant appears. There is no PTC sunset and no
+    polar sunset: a sunset here is the same certified apparent event every
+    other route determines, and its instant is stated by the published
+    directional routes, one at a time, which is the only place this Authority
+    identifies one. ``sunsets`` and ``sunrises`` are how many, never which,
+    and ``crossingEnumerationAgrees`` marks the intervals where the certified
+    root finder under-resolves grazing crossings and those counts are a lower
+    bound rather than a total.
+
+    FOUR BOUNDS, BECAUSE TWO WOULD BE A CLAIM
+
+    ``requested`` is what the caller asked about; ``covered`` is the frontier
+    actually examined. They can legitimately differ, and a regime reported
+    against only the requested pair would attribute to a whole interval a
+    classification that belongs to part of it. Each of the four is projected
+    through the same exact-instant projection every other route uses.
+
+    ``ephemerisRole`` is artifact provenance without an artifact filename. A
+    consumer needing the artifact's identity resolves the role through the
+    published scientific environment, which names it with its content digest.
+
+    NO OBSERVER
+
+    The observer is absent, exactly as it is from the record and from every
+    other projection in this module. It governed the search and is known to
+    the caller that supplied it; echoing it here would create a second,
+    unchecked place where an observer binding could drift from the one the
+    geometry actually ran on. The route still accepts a latitude and a
+    longitude - they simply do not become part of what is transported.
+
+    No calendar meaning is produced. There is no weekday, no day ordinal, no
+    month, no year, no Telma, no Creation week, no Sabbath and no continuity
+    interval. A regime is an astronomical fact about an interval; what a
+    calendar makes of it is a question for a consumer that this Authority does
+    not answer.
+    """
+    return {
+        "regime": record.regime,
+        "crossingPresent": record.crossing_present,
+        "sunsets": record.sunsets,
+        "sunrises": record.sunrises,
+        "crossingEnumerationAgrees": record.enumeration_agrees,
+        "requested": {
+            "lo": project_exact_instant(record.requested_lo),
+            "hi": project_exact_instant(record.requested_hi),
+        },
+        "covered": {
+            "lo": project_exact_instant(record.covered_lo),
+            "hi": project_exact_instant(record.covered_hi),
+        },
+        "complete": record.complete,
+        "truncationReason": record.truncation_reason,
+        "eventThresholdDegrees": record.event_threshold_degrees,
+        "eventConvention": record.event_convention,
+        "minimumAltitudeMarginDegrees": record.minimum_margin_degrees,
+        "maximumAltitudeMarginDegrees": record.maximum_margin_degrees,
+        "resolutionGuardDegrees": record.guard_degrees,
+        "sampleStepDays": record.step_days,
+        "ephemerisRole": record.ephemeris_role,
+    }

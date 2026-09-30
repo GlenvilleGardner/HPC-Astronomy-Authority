@@ -167,6 +167,7 @@ POST_A3C2_ROUTES = frozenset({
     "/sunset-count",
     "/scientific-environment",
     "/earth-rotation",
+    "/solar-regime",
 })
 
 
@@ -816,7 +817,7 @@ class TestA3c2StructuralIsolation(unittest.TestCase):
             ["utc_reference", "project_exact_instant",
              "project_astronomical_event", "project_sunset_event",
              "project_sunset_bracket", "reason_detail",
-             "project_sunset_count"],
+             "project_sunset_count", "project_solar_regime"],
         )
         self.assertEqual(
             [n for n in tree.body if isinstance(n, ast.Assign)], []

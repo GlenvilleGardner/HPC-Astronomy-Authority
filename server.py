@@ -20,6 +20,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     SunsetChronologyError,
     SunsetSuccessorError,
     count_sunsets_in_interval,
+    determine_solar_regime,
     solar_longitude,
     subsolar_point,
     find_equinox,
@@ -37,6 +38,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
 )
 from astronomical_event_transport import (  # noqa: E402 - gate runs first
     project_astronomical_event,
+    project_solar_regime,
     project_sunset_bracket,
     project_sunset_count,
     project_sunset_event,
@@ -1219,3 +1221,95 @@ def earth_rotation(ttBits: str):
             status_code=400,
             detail=reason_detail(error.reason, str(error)),
         ) from error
+
+
+# ---------------------------------------------------------------------------
+# PTC-I2 - certified solar regime and event-absence evidence route.
+#
+# The marker deliberately does NOT obey the repository's governed block
+# grammar (^# A\d+[a-z]?(?:-[0-9a-z]+)? - ). A5 asserts that it is the
+# terminal governed block, and a PTC marker written in that grammar would
+# falsify that claim rather than extend it.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The first contract on this Authority that can say what the Sun does over a
+# declared interval rather than when it next does something. Every existing
+# sunset route answers "when", inside a bounded search, so its silence is a
+# statement about the search horizon and not about the sky.
+#
+# THE DISTINCTION IT EXISTS TO PRESERVE
+#
+# Three answers, never two. A crossing proven present; absence certified over
+# the whole declared interval; or the Authority unable to establish which,
+# because the geometry sits inside the resolution guard or because the
+# examined territory fell short of what was asked. A consumer that cannot
+# tell the third from the second will eventually read a three-day search
+# that found nothing as a sky in which nothing happens.
+#
+# WHAT IT IS NOT
+#
+# Not a polar contract, not a continuity contract and not a calendar
+# contract. It states an astronomical fact about an interval and an observer.
+# No event is synthesized and no event instant is published: a sunset here is
+# the same certified apparent event the directional routes determine, and
+# they remain the only place this Authority identifies one.
+#
+# ADDITIVE
+#
+# No existing route is touched, no existing solver is modified and no
+# astronomical contract changes.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/solar-regime")
+def solar_regime(
+    ttLoBits: str, ttHiBits: str, latitude: float, longitude: float
+):
+    """Return the certified solar regime over an exact TT interval.
+
+    ``ttLoBits`` and ``ttHiBits`` are the IEEE-754 spellings of the exact
+    binary64 Terrestrial Time bounds. Neither need be an event. The interval
+    is closed - a regime is a statement about territory, so both endpoints are
+    examined - and that contract belongs to the published solver, not to this
+    route. ``latitude`` and ``longitude`` are the observer, validated by the
+    substrate against its own governed geodetic domain and not re-validated or
+    normalized here.
+
+    Returns the regime projection: the classification, whether a crossing is
+    present, absent or unestablished, how many crossings the certified root
+    finder resolved and whether that enumeration is whole, the requested and
+    covered intervals with the completeness of that coverage, the event
+    threshold and convention the answer is about, the altitude-margin extremes
+    and the resolution guard they were judged against, and the role of the
+    pinned artifact that answered. No event identity is published.
+
+    Fails closed with HTTP 400 carrying a stable reason, for a malformed bound
+    or for the substrate's own governed refusal - including a reversed or
+    zero-width interval, an observer outside the geodetic domain, and a
+    requested span beyond the governed admission bound.
+
+    A certified continuous regime is a successful answer, not an absence of
+    one, and an interval whose territory could not be fully examined returns
+    INDETERMINATE explicitly rather than reporting that nothing happens in it.
+    """
+    try:
+        interval_lo = decode_tt_bits(ttLoBits)
+        interval_hi = decode_tt_bits(ttHiBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        record = determine_solar_regime(
+            interval_lo, interval_hi, latitude, longitude
+        )
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_solar_regime(record)
