@@ -93,8 +93,11 @@ EXPECTED_MANIFEST_BYTES = (
 )
 EXPECTED_MANIFEST_LENGTH = 376
 
+# DT-A1P: the A0.1b bytes with authoritySolverGeneration advanced from
+# "hpc-authority-solver-v1" to "hpc-authority-solver-v2". No other field
+# changed, so the length is unchanged.
 EXPECTED_ENVIRONMENT_BYTES = (
-    b'{"authoritySolverGeneration":"hpc-authority-solver-v1",'
+    b'{"authoritySolverGeneration":"hpc-authority-solver-v2",'
     b'"ephemerisDataSetId":'
     b'"sha256:4a363dccb92d868a33543c5a2272658dded49d02db4711f9203563603594f84b",'
     b'"horizonModelGeneration":"hpc-apparent-sunset-v1",'
@@ -105,12 +108,15 @@ EXPECTED_ENVIRONMENT_BYTES = (
 )
 EXPECTED_ENVIRONMENT_LENGTH = 410
 
-# Governance-fixed identifiers, independently verified in A0.1b.
+# Governance-fixed identifiers, independently verified in A0.1b. The
+# environment identifier was re-derived in DT-A1P for solver generation v2;
+# the v1 identifier was
+# sha256:c223962508d19a9c969a9d62508497f6d0a418244c06509116668267e250fde0.
 EXPECTED_DATASET_ID = (
     "sha256:4a363dccb92d868a33543c5a2272658dded49d02db4711f9203563603594f84b"
 )
 EXPECTED_ENVIRONMENT_ID = (
-    "sha256:c223962508d19a9c969a9d62508497f6d0a418244c06509116668267e250fde0"
+    "sha256:e07fc1c03a9047896bc223d642378e3bea6c4efc390782c0b166ba933f974c6d"
 )
 
 
@@ -393,7 +399,8 @@ class TestFailClosedEnvironment(FailClosedMixin, unittest.TestCase):
 
     def test_wrong_solver_generation_rejected(self):
         environment = dict(build_environment())
-        environment["authoritySolverGeneration"] = "hpc-authority-solver-v2"
+        # The retired generation must be refused, not merely an unknown one.
+        environment["authoritySolverGeneration"] = "hpc-authority-solver-v1"
         self.assert_fails_closed(se.validate_scientific_environment, environment)
 
     def test_wrong_horizon_generation_rejected(self):

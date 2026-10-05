@@ -55,7 +55,10 @@ from pathlib import Path
 SCIENTIFIC_ENVIRONMENT_SCHEMA_VERSION = "1"
 EPHEMERIS_MANIFEST_SCHEMA_VERSION = "1"
 
-AUTHORITY_SOLVER_GENERATION = "hpc-authority-solver-v1"
+# v2 (DT-A1): certified sunset-event detection. Counts and directional sunset
+# answers can differ from v1 in grazing geometry, which is a scientific
+# behaviour change and so advances the generation (see server.py).
+AUTHORITY_SOLVER_GENERATION = "hpc-authority-solver-v2"
 HORIZON_MODEL_GENERATION = "hpc-apparent-sunset-v1"
 
 # Logical roles, not filenames. Routing names are bound to bytes inside the

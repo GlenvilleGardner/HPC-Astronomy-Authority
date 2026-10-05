@@ -430,6 +430,12 @@ class TestBoundaryCoincidence(unittest.TestCase):
     the Authority does not guarantee those bits. The transitions are therefore
     supplied directly, so the comparison under test is exercised at exactly
     the states intended and nothing else can explain the outcome.
+
+    DT-A1: a reported sunset is now accepted only inside a certified setting
+    bracket, and the real sky has none at a staged state. The certified
+    structure is therefore staged consistently with the staged transition -
+    one setting bracket ending at it when it lies in (LO, HI], none otherwise -
+    so the ownership comparison remains the only thing under test.
     """
 
     LO = None
@@ -446,9 +452,22 @@ class TestBoundaryCoincidence(unittest.TestCase):
 
         return mock.Mock(return_value=(times, events))
 
+    def _staged_structure(self, sunset_tt=None):
+        """Return a certified-structure stub consistent with the staging."""
+        setting = ()
+        if sunset_tt is not None and self.LO < sunset_tt <= self.HI:
+            setting = ((sunset_tt - 0.01, sunset_tt),)
+
+        return mock.Mock(
+            return_value=astronomy_solver._SunsetStructure(setting, (), ())
+        )
+
     def _count_with(self, sunset_tt):
         with mock.patch.object(
             astronomy_solver.almanac, "find_discrete", self._staged(sunset_tt)
+        ), mock.patch.object(
+            astronomy_solver, "_certified_sunset_structure",
+            self._staged_structure(sunset_tt),
         ):
             return count_sunsets_in_interval(self.LO, self.HI, *NEW_YORK)
 
@@ -503,6 +522,9 @@ class TestBoundaryCoincidence(unittest.TestCase):
 
         with mock.patch.object(
             astronomy_solver.almanac, "find_discrete", staged
+        ), mock.patch.object(
+            astronomy_solver, "_certified_sunset_structure",
+            self._staged_structure(),
         ):
             record = count_sunsets_in_interval(self.LO, self.HI, *NEW_YORK)
 
@@ -748,19 +770,22 @@ class TestClassBSamplingCharacterization(unittest.TestCase):
                     record.count, len([tt for tt in fine if lo < tt <= hi])
                 )
 
-    def test_known_polar_transition_divergence_is_pinned(self):
-        """CHARACTERIZATION ONLY - records a limitation, changes nothing.
+    def test_polar_transition_divergence_is_recovered(self):
+        """DT-A1 supersedes the pinned divergence this test used to record.
 
-        Above the currently constructible calendar domain the production grid
-        resolves FEWER transitions than the finer one, because a brief day or
-        brief night shorter than the grid spacing falls between two samples
-        and both of its bounding transitions vanish together.
+        Before DT-A1 the production count resolved FEWER transitions than the
+        finer grid at these observers, because a brief day or night shorter
+        than the 0.04-day grid fell between two samples, and the count still
+        reported itself complete. The certified detection now recovers every
+        such crossing, so the production count must be complete and must
+        resolve at least every transition the finer grid resolves.
 
-        This is the certified predicate's documented resolution, not a defect
-        introduced here, and the production count deliberately matches it.
+        Non-vacuity: at least one observer must still show the bare
+        production-step grid missing transitions the certified count finds,
+        or this test no longer exercises the correction it documents.
         """
         lo, hi = tt_of(2027, 3, 21), tt_of(2028, 3, 21)
-        divergent = []
+        recovered = []
 
         for name, (latitude, longitude) in POLAR_TRANSITION_OBSERVERS:
             record = count_sunsets_in_interval(lo, hi, latitude, longitude)
@@ -771,20 +796,25 @@ class TestClassBSamplingCharacterization(unittest.TestCase):
                 )
                 if lo < tt <= hi
             ]
+            coarse = [
+                tt
+                for tt in sunsets_on_grid(
+                    latitude, longitude, lo, hi, PRODUCTION_STEP_DAYS
+                )
+                if lo < tt <= hi
+            ]
 
             self.assertTrue(record.complete)
-            self.assertLessEqual(record.count, len(fine))
+            self.assertIsNone(record.truncation_reason)
+            self.assertGreaterEqual(record.count, len(fine))
 
-            if record.count != len(fine):
-                divergent.append((name, record.count, len(fine)))
+            if record.count > len(coarse):
+                recovered.append((name, len(coarse), record.count))
 
-        # Non-vacuity: this test is worthless if it pins nothing. At least one
-        # of the pinned observers must actually diverge, or the limitation it
-        # documents has changed and the documentation must change with it.
         self.assertTrue(
-            divergent,
-            "no polar-transition divergence observed; the sampling "
-            "characterization in astronomy_solver must be revisited",
+            recovered,
+            "no observer shows the production-step grid missing a transition; "
+            "the DT-A1 characterization must be revisited",
         )
 
 
@@ -895,7 +925,12 @@ class TestImplementationDiscipline(unittest.TestCase):
         source = self.solver_source
 
         self.assertIn("for t, sun_is_up in zip(times, events)", source)
-        self.assertIn("count += 1", source)
+
+        # DT-A1: reported transitions are reconciled against the certified
+        # structure, which keeps each of them and adds every missed crossing.
+        self.assertIn("reported.append(event_tt)", source)
+        self.assertIn("_certified_sunsets_in_frontier(", source)
+        self.assertIn("count=len(sunsets)", source)
 
     def test_the_span_bound_is_compared_on_exact_states(self):
         source = self.solver_source
@@ -905,8 +940,15 @@ class TestImplementationDiscipline(unittest.TestCase):
     def test_completeness_is_carried_from_the_substrate_not_decided(self):
         source = self.solver_source
 
-        self.assertIn("complete=frontier.complete", source)
-        self.assertIn("truncation_reason=frontier.truncation_reason", source)
+        # DT-A1: complete means coverage complete AND detection certified.
+        # Coverage failure keeps the substrate's own reason; only a covered
+        # interval may report a detection reason.
+        self.assertIn(
+            "complete = frontier.complete and detection_reason is None", source
+        )
+        self.assertIn(
+            "frontier.truncation_reason if not frontier.complete", source
+        )
 
         # Nothing may assign completeness a literal.
         self.assertNotIn("complete=True", source)

@@ -479,9 +479,24 @@ class TestBoundaryCoincidenceProjection(CountRouteAssertions):
     def _staged(self, sunset_tt):
         return mock.Mock(return_value=(ts.tt_jd([sunset_tt]), [False]))
 
+    def _staged_structure(self, sunset_tt):
+        # DT-A1: a reported sunset is accepted only inside a certified setting
+        # bracket, so the certified structure is staged consistently with the
+        # staged transition and the projected flag stays the thing under test.
+        setting = ()
+        if self.LO < sunset_tt <= self.HI:
+            setting = ((sunset_tt - 0.01, sunset_tt),)
+
+        return mock.Mock(
+            return_value=astronomy_solver._SunsetStructure(setting, (), ())
+        )
+
     def _body_with(self, sunset_tt):
         with mock.patch.object(
             astronomy_solver.almanac, "find_discrete", self._staged(sunset_tt)
+        ), mock.patch.object(
+            astronomy_solver, "_certified_sunset_structure",
+            self._staged_structure(sunset_tt),
         ):
             return count_response(self.LO, self.HI)
 

@@ -54,7 +54,7 @@ EXPECTED_PAYLOAD_FIELDS = (
 EXPECTED_ENVELOPE_FIELDS = ("checksum", "payload")
 
 EXPECTED_CURSOR_SCHEMA_GENERATION = "hpc-sunset-cursor-v1"
-EXPECTED_AUTHORITY_SOLVER_GENERATION = "hpc-authority-solver-v1"
+EXPECTED_AUTHORITY_SOLVER_GENERATION = "hpc-authority-solver-v2"
 EXPECTED_HORIZON_MODEL_GENERATION = "hpc-apparent-sunset-v1"
 
 EXPECTED_PYTHON_VERSION = "CPython 3.13.7"
@@ -604,10 +604,11 @@ class TestEnvironmentRejection(RejectionMixin, unittest.TestCase):
                 self.assertIn(field, str(error))
 
     def test_solver_generation_mismatch_rejected(self):
+        # A cursor issued under the retired generation must be refused.
         self.assert_rejected(
             independent_cursor(
                 reference_payload(
-                    authoritySolverGeneration="hpc-authority-solver-v2"
+                    authoritySolverGeneration="hpc-authority-solver-v1"
                 )
             ),
             sunset_cursor.REASON_INCOMPATIBLE_ENVIRONMENT,

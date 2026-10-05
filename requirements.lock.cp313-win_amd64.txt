@@ -26,6 +26,11 @@
 # A0.1 reference point: this environment yielded
 #     scientificEnvironmentId =
 #     sha256:c223962508d19a9c969a9d62508497f6d0a418244c06509116668267e250fde0
+# under authoritySolverGeneration hpc-authority-solver-v1.
+#
+# DT-A1P: the same dependency closure under hpc-authority-solver-v2 yields
+#     scientificEnvironmentId =
+#     sha256:e07fc1c03a9047896bc223d642378e3bea6c4efc390782c0b166ba933f974c6d
 #
 # No hashes. Wheel digests here would pin win_amd64 artifacts and would fail
 # outright on Linux; cross-platform hashes cannot be honestly produced before

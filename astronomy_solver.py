@@ -1606,6 +1606,8 @@ def find_sunset_from_instant(tt, latitude, longitude):
             % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
         ) from error
 
+    reported = None
+
     for t, sun_is_up in zip(times, events):
         if bool(sun_is_up):
             continue
@@ -1613,7 +1615,28 @@ def find_sunset_from_instant(tt, latitude, longitude):
         event_tt = float(t.tt)
 
         if event_tt > anchor:
-            return SunsetEvent(tt=event_tt, kernel=frontier.kernel)
+            reported = event_tt
+            break
+
+    # DT-A1: the root finder's answer is kept, bit for bit, unless the
+    # certified structure shows it skipped an earlier sunset. See the DT-A1
+    # block below.
+    try:
+        certified = _certified_first_sunset_after(
+            frontier, anchor, latitude, longitude, is_sun_up, reported
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no sunset is "
+            "reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    if certified is not None:
+        return SunsetEvent(tt=certified, kernel=frontier.kernel)
 
     if frontier.complete:
         return None
@@ -3144,8 +3167,7 @@ def count_sunsets_in_interval(tt_lo, tt_hi, latitude, longitude):
             % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
         ) from error
 
-    count = 0
-    boundary_coincident = False
+    reported = []
 
     for t, sun_is_up in zip(times, events):
         if bool(sun_is_up):
@@ -3160,23 +3182,48 @@ def count_sunsets_in_interval(tt_lo, tt_hi, latitude, longitude):
         if not (frontier.tt_lo < event_tt <= frontier.tt_hi):
             continue
 
-        count += 1
+        reported.append(event_tt)
 
-        # Exact binary64 equality against the state the CALLER asked for, not
-        # against the frontier. A truncated frontier ends below the requested
-        # bound, so no crossing inside it can coincide with that bound, and
-        # this correctly stays False.
-        if event_tt == hi:
-            boundary_coincident = True
+    # DT-A1: every reported sunset is kept with its own bits, and every
+    # certified sunset the root finder missed is added. See the DT-A1 block
+    # below.
+    try:
+        sunsets, detection_reason = _certified_sunsets_in_frontier(
+            frontier, latitude, longitude, is_sun_up, reported
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no count is "
+            "reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    # Exact binary64 equality against the state the CALLER asked for, not
+    # against the frontier. A truncated frontier ends below the requested
+    # bound, so no crossing inside it can coincide with that bound, and this
+    # correctly stays False.
+    boundary_coincident = any(event_tt == hi for event_tt in sunsets)
+
+    # A count is complete only when the whole interval was covered AND every
+    # crossing in it is certified detected. Coverage failure keeps its own
+    # reason; otherwise an uncertified region reports the detection reason.
+    complete = frontier.complete and detection_reason is None
+    truncation_reason = (
+        frontier.truncation_reason if not frontier.complete
+        else detection_reason
+    )
 
     return SunsetCount(
-        count=count,
+        count=len(sunsets),
         requested_lo=lo,
         requested_hi=hi,
         covered_lo=frontier.tt_lo,
         covered_hi=frontier.tt_hi,
-        complete=frontier.complete,
-        truncation_reason=frontier.truncation_reason,
+        complete=complete,
+        truncation_reason=truncation_reason,
         boundary_coincident=boundary_coincident,
         kernel=frontier.kernel,
     )
@@ -3721,3 +3768,464 @@ def determine_solar_regime(tt_lo, tt_hi, latitude, longitude):
         event_convention=EVENT_CONVENTION,
         ephemeris_role=_EPHEMERIS_ROLE_BY_KERNEL[frontier.kernel],
     )
+
+
+# ---------------------------------------------------------------------------
+# DT-A1 - certified sunset-event detection.
+#
+# WHAT THIS BLOCK ADDS
+#
+# Detection completeness. The certified predicate is still
+# almanac.sunrise_sunset, unchanged, and every event it already resolves is
+# still reported with exactly the bits it was reported with before. What
+# changes is what a "complete" search is allowed to claim.
+#
+# The certified root finder laid its samples step_days = 0.04 apart and
+# refined only pairs whose sampled value differed. A night or a day shorter
+# than that spacing that falls between two samples presents no difference,
+# and both of its transitions were missed together while the search still
+# reported its frontier as complete. At astronomical year -4018, 65 degrees
+# north, that reported 356 sunsets where 365 exist.
+#
+# THE CERTIFIED STRUCTURE (DT-A2 / DT-A2C)
+#
+# G(t) = sin(alt(t)) - sin(-0.8333 deg), where alt is the identical apparent
+# topocentric altitude of the Sun's centre the predicate compares. G has the
+# predicate's sign. Every interval of the searched territory is partitioned
+# until each leaf is certified by one of three theorems, with the governed
+# derivative bounds L1 >= sup|G'| and L2 >= sup|G''| and the governed
+# floating-point allowance epsilon_G:
+#
+#   cone       (Ga-B-e)+(Gb-B-e) > L1 w                      => G clear of zero
+#   quadratic  min(Ga,Gb)-B-e > L2 w^2/8 + m J1 w/4          => G clear of zero
+#   monotone   |Gb-Ga| - 2e > L2 w^2/2 + m J1 w              => G' != 0
+#
+# A monotone leaf with certified endpoint signs holds exactly one crossing if
+# the signs differ, oriented as sign(Ga), and none otherwise. A leaf that no
+# theorem certifies by W_MIN is reported AMBIGUOUS and is never classified.
+# The pinned Delta-T model has 19 value knots where G jumps; the territory is
+# cut there, and a crossing that cannot be excluded across a knot is reported
+# AMBIGUOUS_DT_KNOT rather than searched through.
+#
+# EVENT IDENTITY IS NOT CHANGED
+#
+# The certified structure decides HOW MANY setting crossings exist and which
+# bracket each one lies in. It never decides an event's instant. Every
+# crossing the certified root finder already reported is kept with its own
+# bits, provided it lies in exactly one certified setting bracket. Only a
+# bracket the root finder missed is refined, by the same root finder over that
+# bracket alone, under the same convention. A reported crossing that lies in no
+# certified bracket, or two in one, is an inconsistency, and the search fails
+# closed rather than choosing between them.
+#
+# No event is synthesised or interpolated, and no calendar rule appears here.
+# ---------------------------------------------------------------------------
+
+REASON_SUNSET_DETECTION_AMBIGUOUS = "SUNSET_DETECTION_AMBIGUOUS"
+REASON_SUNSET_DETECTION_AMBIGUOUS_DT_KNOT = "SUNSET_DETECTION_AMBIGUOUS_DT_KNOT"
+REASON_SUNSET_DETECTION_INCONSISTENT = "SUNSET_DETECTION_INCONSISTENT"
+
+# Governed DT-A2 / DT-A2C constants. None may be lowered: each one is a term
+# of a proof, not a tuning parameter.
+DETECTION_EPSILON_G = 1e-10
+DETECTION_BOUNDARY_GUARD = 2.0 * DETECTION_EPSILON_G
+DETECTION_BAND_DEGREES = 1e-6
+DETECTION_W_SEED_DAYS = 2.0 ** -5
+DETECTION_W_MIN_DAYS = 2.0 ** -16
+DETECTION_L1_COEFFICIENTS = (6.5, 0.02)
+DETECTION_L2_COEFFICIENTS = (42.0, 0.02)
+DETECTION_J0_COEFFICIENT = 7.292122438822127e-08
+DETECTION_J1_COEFFICIENT = 3.9912377712236665e-08
+DETECTION_SLOPE_BREAKS = 2
+
+# The 19 value knots of the pinned Delta-T model (Skyfield 1.54 S15 table),
+# in the model's own year coordinate; TT = 1721045 + 365.25 * year. A value
+# knot is EVERY routed long-term spline boundary whose analytic Delta-T value
+# jump exceeds 1e-9 s, whether or not the slope is also discontinuous. They
+# are selected directly from all routed boundaries, never from a
+# slope-filtered subset: 1895 and 1945 are pure 1 ms value steps with no slope
+# break (DT-A2K / DT-A2K-R). A certification test checks the list against the
+# runtime's bundled table.
+DETECTION_DT_KNOT_YEARS = (
+    -100.0, 1150.0, 1650.0, 1720.0, 1830.0, 1850.0, 1855.0, 1865.0, 1875.0,
+    1890.0, 1895.0, 1905.0, 1915.0, 1920.0, 1935.0, 1940.0, 1945.0, 1950.0,
+    1965.0,
+)
+DETECTION_DT_KNOT_TT = tuple(
+    1721045.0 + 365.25 * year for year in DETECTION_DT_KNOT_YEARS
+)
+DETECTION_DT_KNOT_HALF_GAP_DAYS = 1e-6
+
+_DETECTION_S0 = math.sin(math.radians(EVENT_THRESHOLD_DEGREES))
+_DETECTION_BAND_G = min(
+    abs(math.sin(math.radians(EVENT_THRESHOLD_DEGREES + sign * DETECTION_BAND_DEGREES))
+        - _DETECTION_S0)
+    for sign in (1.0, -1.0)
+)
+
+# The certified root finder's own convergence width: a reported crossing lies
+# at most this far after the true one, which is how far past a certified
+# bracket's upper end its report may legitimately fall.
+_FIND_DISCRETE_EPSILON_DAYS = 0.001 / 86400.0
+
+
+def detection_l1(latitude):
+    """Governed upper bound on |G'| in per-day units (DT-A2C L1)."""
+    coefficient, constant = DETECTION_L1_COEFFICIENTS
+    return coefficient * abs(math.cos(math.radians(latitude))) + constant
+
+
+def detection_l2(latitude):
+    """Governed upper bound on |G''| in per-day-squared units (DT-A2C L2)."""
+    coefficient, constant = DETECTION_L2_COEFFICIENTS
+    return coefficient * abs(math.cos(math.radians(latitude))) + constant
+
+
+# Lemma S of DT-A2: a seed no wider than this can never hold both a crossing
+# and the Earth-deflection gate's jump.
+if not DETECTION_W_SEED_DAYS < 0.2903 / detection_l1(0.0):
+    raise ScientificEnvironmentError(
+        "SUNSET DETECTION UNCERTIFIED - W_SEED violates DT-A2 Lemma S"
+    )
+
+
+@dataclass(frozen=True)
+class _SunsetStructure:
+    """Certified crossing brackets over one territory, ascending.
+
+    ``setting`` and ``rising`` are (lo, hi) brackets each holding exactly one
+    crossing of that orientation strictly inside. ``ambiguities`` are
+    (kind, lo, hi) regions no theorem certified; nothing inside them is
+    classified.
+    """
+
+    setting: tuple
+    rising: tuple
+    ambiguities: tuple
+
+
+def _detection_margin(kernel_name, latitude, longitude):
+    """Return G as a vectorised function of exact TT values.
+
+    The same topocentric observer, apparent place, nutation assignment and
+    altitude as almanac.sunrise_sunset's is_sun_up_at, read as a number.
+    """
+    ephemeris = load_kernel(kernel_name)
+    observe_at = (ephemeris["earth"] + wgs84.latlon(latitude, longitude)).at
+    sun = ephemeris["sun"]
+
+    def margin(tt_values):
+        instants = ts.tt_jd(numpy.asarray(tt_values, dtype=float))
+        instants._nutation_angles_radians = iau2000b_radians(instants)
+        altitude = observe_at(instants).observe(sun).apparent().altaz()[0]
+        return numpy.sin(numpy.asarray(altitude.radians)) - _DETECTION_S0
+
+    return margin
+
+
+def _certified_sunset_structure(margin, latitude, tt_lo, tt_hi, boundary_guard):
+    """Partition [tt_lo, tt_hi] into certified leaves (DT-A2 enumerator)."""
+    cos_phi = abs(math.cos(math.radians(latitude)))
+    l1 = detection_l1(latitude)
+    l2 = detection_l2(latitude)
+    j1 = DETECTION_J1_COEFFICIENT * cos_phi + 1e-16
+    j0 = DETECTION_J0_COEFFICIENT * cos_phi + 4e-15
+    eps = DETECTION_EPSILON_G
+    band = _DETECTION_BAND_G
+    breaks = DETECTION_SLOPE_BREAKS
+
+    g_lo, g_hi = margin([tt_lo, tt_hi])
+    if abs(g_lo) <= boundary_guard or abs(g_hi) <= boundary_guard:
+        return _SunsetStructure((), (), (("AMBIGUOUS_BOUNDARY", tt_lo, tt_hi),))
+
+    setting, rising, ambiguities = [], [], []
+    pieces, previous = [], tt_lo
+    for knot in DETECTION_DT_KNOT_TT:
+        below = knot - DETECTION_DT_KNOT_HALF_GAP_DAYS
+        above = knot + DETECTION_DT_KNOT_HALF_GAP_DAYS
+        if above <= tt_lo or below >= tt_hi:
+            continue
+        if below <= tt_lo or above >= tt_hi:
+            return _SunsetStructure(
+                (), (), (("AMBIGUOUS_DT_KNOT", tt_lo, tt_hi),)
+            )
+        g_below, g_above = margin([below, above])
+        if min(abs(g_below), abs(g_above)) <= (
+            j0 + l1 * 2.0 * DETECTION_DT_KNOT_HALF_GAP_DAYS + eps
+        ):
+            ambiguities.append(("AMBIGUOUS_DT_KNOT", below, above))
+        pieces.append((previous, below))
+        previous = above
+    pieces.append((previous, tt_hi))
+
+    for piece_lo, piece_hi in pieces:
+        count = max(1, int(math.ceil((piece_hi - piece_lo) / DETECTION_W_SEED_DAYS)))
+        x = numpy.linspace(piece_lo, piece_hi, count + 1)
+        g = margin(x)
+
+        # Every internal seed point must be sign-determinate.
+        for i in range(1, count):
+            for fraction in (0.5 + 1.0 / 16.0, 0.5 - 1.0 / 16.0):
+                if abs(g[i]) > eps:
+                    break
+                x[i] = x[i - 1] + (x[i + 1] - x[i - 1]) * fraction
+                g[i] = margin([x[i]])[0]
+
+        stack = [(x[i], x[i + 1], g[i], g[i + 1]) for i in range(count)]
+        while stack:
+            a_, b_, ga, gb = stack.pop()
+            w = b_ - a_
+            determinate_a, determinate_b = abs(ga) > eps, abs(gb) > eps
+
+            if determinate_a and determinate_b and ga * gb > 0:
+                ma, mb = abs(ga) - band - eps, abs(gb) - band - eps
+                if ma > 0 and mb > 0 and (
+                    ma + mb > l1 * w
+                    or min(ma, mb) > l2 * w * w / 8.0 + breaks * j1 * w / 4.0
+                ):
+                    continue
+
+            if determinate_a and determinate_b and (
+                abs(gb - ga) - 2.0 * eps > l2 * w * w / 2.0 + breaks * j1 * w
+            ):
+                if ga * gb < 0:
+                    (setting if ga > 0 else rising).append((float(a_), float(b_)))
+                continue
+
+            if w <= DETECTION_W_MIN_DAYS:
+                ambiguities.append(
+                    ("AMBIGUOUS_UNDER_GOVERNED_BAND", float(a_), float(b_))
+                )
+                continue
+
+            for fraction in (0.5, 0.5 + 1.0 / 16.0, 0.5 - 1.0 / 16.0):
+                middle = a_ + w * fraction
+                g_middle = margin([middle])[0]
+                if abs(g_middle) > eps:
+                    break
+            else:
+                ambiguities.append(
+                    ("AMBIGUOUS_INDETERMINATE_POINT", float(a_), float(b_))
+                )
+                continue
+            stack.append((a_, middle, ga, g_middle))
+            stack.append((middle, b_, g_middle, gb))
+
+    return _SunsetStructure(
+        tuple(sorted(setting)), tuple(sorted(rising)),
+        tuple(sorted(ambiguities, key=lambda item: item[1])),
+    )
+
+
+def _ambiguity_reason(ambiguities):
+    """The stable reason an uncertified search reports."""
+    if any(kind == "AMBIGUOUS_DT_KNOT" for kind, _, _ in ambiguities):
+        return REASON_SUNSET_DETECTION_AMBIGUOUS_DT_KNOT
+    return REASON_SUNSET_DETECTION_AMBIGUOUS
+
+
+def _detection_inconsistent(message):
+    return SunsetChronologyError(
+        REASON_SUNSET_DETECTION_INCONSISTENT,
+        "SUNSET DETECTION INCONSISTENT - " + message,
+    )
+
+
+def _refine_missed_sunset(is_sun_up, bracket_lo, bracket_hi):
+    """Locate the one certified setting crossing the root finder missed.
+
+    The certified root finder runs over the certified bracket alone, under
+    its own convention, so the event is reported exactly as it would have
+    been had the original search seen it. Anything other than one setting
+    transition contradicts the certificate and fails closed.
+    """
+    times, events = almanac.find_discrete(
+        ts.tt_jd(bracket_lo), ts.tt_jd(bracket_hi), is_sun_up
+    )
+    if len(times) != 1 or bool(events[0]):
+        raise _detection_inconsistent(
+            "the certified setting bracket TT %r .. %r resolved %d "
+            "transitions under the certified predicate"
+            % (bracket_lo, bracket_hi, len(times))
+        )
+    return float(times[0].tt)
+
+
+def _match_reported(bracket, reported):
+    """Reported crossings falling in one certified setting bracket."""
+    lo, hi = bracket
+    return [tt for tt in reported if lo < tt <= hi + _FIND_DISCRETE_EPSILON_DAYS]
+
+
+def _certified_sunsets_in_frontier(frontier, latitude, longitude, is_sun_up, reported):
+    """Return (sunset TT values, detection reason or None) over the frontier.
+
+    ``reported`` are the setting crossings the certified root finder
+    reported inside (tt_lo, tt_hi]. The result keeps each of them unchanged
+    and adds every certified crossing it missed.
+    """
+    margin = _detection_margin(frontier.kernel, latitude, longitude)
+    structure = _certified_sunset_structure(
+        margin, latitude, frontier.tt_lo, frontier.tt_hi,
+        DETECTION_BOUNDARY_GUARD,
+    )
+
+    events, used = [], set()
+    for bracket in structure.setting:
+        inside = _match_reported(bracket, reported)
+        if len(inside) > 1:
+            raise _detection_inconsistent(
+                "two reported sunsets lie in one certified setting bracket "
+                "TT %r .. %r" % bracket
+            )
+        if inside:
+            events.append(inside[0])
+            used.add(inside[0])
+        else:
+            events.append(_refine_missed_sunset(is_sun_up, *bracket))
+
+    for tt in reported:
+        if tt in used:
+            continue
+        if not any(lo <= tt <= hi + _FIND_DISCRETE_EPSILON_DAYS
+                   for _, lo, hi in structure.ambiguities):
+            raise _detection_inconsistent(
+                "the reported sunset TT %r lies in no certified setting "
+                "bracket and no ambiguous region" % (tt,)
+            )
+        events.append(tt)
+
+    events.sort()
+    if any(later <= earlier for earlier, later in zip(events, events[1:])):
+        raise _detection_inconsistent("sunset events are not strictly ordered")
+
+    reason = _ambiguity_reason(structure.ambiguities) if structure.ambiguities else None
+    return tuple(events), reason
+
+
+def _clear_anchor(margin, latitude, anchor, horizon, is_sun_up):
+    """Resolve an anchor that sits within the boundary guard of a crossing.
+
+    Returns ("FOUND", end) when a setting crossing lies strictly after the
+    anchor inside [anchor, end], ("CLEAR", end) when none does, or None when
+    no window up to W_SEED certifies the anchor's neighbourhood. Monotone G
+    over [anchor, end] admits at most one crossing; which side of the anchor
+    it falls on is decided by the certified predicate's own value at the
+    anchor, which is the canonical event definition. No sample lies before
+    the anchor.
+    """
+    cos_phi = abs(math.cos(math.radians(latitude)))
+    l2 = detection_l2(latitude)
+    j1 = DETECTION_J1_COEFFICIENT * cos_phi + 1e-16
+    eps = DETECTION_EPSILON_G
+    g_anchor = margin([anchor])[0]
+    width = DETECTION_W_MIN_DAYS
+
+    while width <= DETECTION_W_SEED_DAYS:
+        end = anchor + width
+        if end >= horizon:
+            return None
+        if any(anchor - DETECTION_DT_KNOT_HALF_GAP_DAYS <= knot <= end
+               + DETECTION_DT_KNOT_HALF_GAP_DAYS for knot in DETECTION_DT_KNOT_TT):
+            return None
+        g_end = margin([end])[0]
+        if abs(g_end) > eps and (
+            abs(g_end - g_anchor) - 2.0 * eps
+            > l2 * width * width / 2.0 + DETECTION_SLOPE_BREAKS * j1 * width
+        ):
+            setting = g_end < g_anchor
+            if setting and bool(is_sun_up(ts.tt_jd(anchor))):
+                return ("FOUND", end)
+            return ("CLEAR", end)
+        width *= 2.0
+
+    return None
+
+
+def _certified_first_sunset_after(frontier, anchor, latitude, longitude, is_sun_up, reported):
+    """Return the certified earliest sunset strictly after ``anchor``, or None.
+
+    ``reported`` is the root finder's earliest setting crossing after the
+    anchor inside the frontier, or None. None is returned only when the whole
+    frontier is certified to hold no qualifying sunset; an uncertified
+    neighbourhood before the first certified crossing raises its ambiguity.
+    """
+    margin = _detection_margin(frontier.kernel, latitude, longitude)
+    lo, hi = anchor, frontier.tt_hi
+
+    if abs(margin([lo])[0]) <= DETECTION_BOUNDARY_GUARD:
+        cleared = _clear_anchor(margin, latitude, lo, hi, is_sun_up)
+        if cleared is None:
+            raise SunsetChronologyError(
+                REASON_SUNSET_DETECTION_AMBIGUOUS,
+                "SUNSET DETECTION AMBIGUOUS - the anchor TT %r lies within "
+                "the governed boundary guard of a crossing that could not be "
+                "certified" % (anchor,),
+            )
+        outcome, end = cleared
+        if outcome == "FOUND":
+            if reported is not None and anchor < reported <= end + _FIND_DISCRETE_EPSILON_DAYS:
+                return reported
+            times, events = almanac.find_discrete(
+                ts.tt_jd(anchor), ts.tt_jd(end), is_sun_up
+            )
+            settings = [float(t.tt) for t, up in zip(times, events)
+                        if not bool(up) and float(t.tt) > anchor]
+            if len(settings) != 1:
+                raise _detection_inconsistent(
+                    "the anchor window TT %r .. %r resolved %d setting "
+                    "transitions" % (anchor, end, len(settings))
+                )
+            return settings[0]
+        lo = end
+
+    ambiguities = []
+    if abs(margin([hi])[0]) <= DETECTION_EPSILON_G:
+        moved = hi
+        while abs(margin([moved])[0]) <= DETECTION_EPSILON_G:
+            moved -= DETECTION_W_MIN_DAYS
+            if moved <= lo:
+                raise SunsetChronologyError(
+                    REASON_SUNSET_DETECTION_AMBIGUOUS,
+                    "SUNSET DETECTION AMBIGUOUS - the directional horizon is "
+                    "indeterminate",
+                )
+        ambiguities.append(("AMBIGUOUS_BOUNDARY", moved, hi))
+        hi = moved
+
+    structure = _certified_sunset_structure(
+        margin, latitude, lo, hi, DETECTION_EPSILON_G
+    )
+    ambiguities.extend(structure.ambiguities)
+
+    if structure.setting:
+        first_lo, first_hi = structure.setting[0]
+        earlier = [item for item in ambiguities if item[1] < first_lo]
+        if earlier:
+            raise SunsetChronologyError(
+                _ambiguity_reason(earlier),
+                "SUNSET DETECTION AMBIGUOUS - an uncertified region precedes "
+                "the first certified sunset after the anchor TT %r" % (anchor,),
+            )
+        if reported is not None:
+            if first_lo < reported <= first_hi + _FIND_DISCRETE_EPSILON_DAYS:
+                return reported
+            if reported <= first_lo:
+                raise _detection_inconsistent(
+                    "the reported sunset TT %r precedes every certified "
+                    "setting bracket" % (reported,)
+                )
+        return _refine_missed_sunset(is_sun_up, first_lo, first_hi)
+
+    if ambiguities:
+        raise SunsetChronologyError(
+            _ambiguity_reason(ambiguities),
+            "SUNSET DETECTION AMBIGUOUS - no sunset is certified after the "
+            "anchor TT %r and an uncertified region remains" % (anchor,),
+        )
+    if reported is not None:
+        raise _detection_inconsistent(
+            "the reported sunset TT %r lies in no certified setting bracket"
+            % (reported,)
+        )
+    return None
