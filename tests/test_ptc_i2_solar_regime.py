@@ -942,6 +942,18 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
         "/earth-rotation": "earth_rotation",
     }
 
+    # Application routes added by governed increments AFTER PTC-I2.
+    #
+    # PTC-I2's closed-world claim is about the surface AS OF PTC-I2: that this
+    # increment added exactly one route. A later additive increment does not
+    # weaken that claim, but it does make an unqualified count of the whole
+    # application factually wrong. Subtracting the later additions keeps the
+    # claim exactly as strong as it was while letting it stay true.
+    #
+    # Each entry is owned by the increment that added it, and its own suite
+    # owns the closed world as of that increment.
+    POST_PTC_I2_ROUTES = frozenset({"/night-start-after"})
+
     def test_every_previously_published_route_is_still_registered(self):
         routes = registered_routes()
 
@@ -963,7 +975,10 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
             if not path.startswith(("/openapi", "/docs", "/redoc"))
         }
 
-        self.assertEqual(published - set(self.PREVIOUS), {REGIME_PATH})
+        self.assertEqual(
+            published - set(self.PREVIOUS) - self.POST_PTC_I2_ROUTES,
+            {REGIME_PATH},
+        )
 
     def test_an_existing_solar_event_route_still_answers_unchanged(self):
         body = server.sunset_event_after(

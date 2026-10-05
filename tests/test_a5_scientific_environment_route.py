@@ -690,7 +690,9 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     #
     # Each entry is owned by the increment that added it, and its own suite
     # owns the closed world as of that increment.
-    POST_A5_ROUTES = frozenset({"/earth-rotation", "/solar-regime"})
+    POST_A5_ROUTES = frozenset({
+        "/earth-rotation", "/solar-regime", "/night-start-after",
+    })
 
     def test_exactly_one_route_was_added(self):
         routes = registered_routes()

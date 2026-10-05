@@ -460,7 +460,7 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     #
     # Each entry is owned by the increment that added it, and its own suite
     # owns the closed world as of that increment.
-    POST_PTC_I1_ROUTES = frozenset({"/solar-regime"})
+    POST_PTC_I1_ROUTES = frozenset({"/solar-regime", "/night-start-after"})
 
     def test_this_increment_added_exactly_one_route(self):
         routes = registered_routes()

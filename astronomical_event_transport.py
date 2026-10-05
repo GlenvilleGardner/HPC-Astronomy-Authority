@@ -361,3 +361,61 @@ def project_solar_regime(record):
         "sampleStepDays": record.step_days,
         "ephemerisRole": record.ephemeris_role,
     }
+
+
+def project_night_start(record):
+    """Return the wire projection of a certified night-start.
+
+    ``record`` is a published NightStart. Its kind, its bracket, its event,
+    its evidence and its provenance are carried through unchanged; nothing
+    is recomputed, reinterpreted or renamed, and the record itself is not
+    modified.
+
+    THE BRACKET IS THE CLAIM
+
+    ``nightStartLo`` and ``nightStartHi`` bound the night-start inclusively
+    and both lie strictly after the instant asked about. For a genuine sunset
+    they are the same state. For a vanished night, or one too near tangency
+    to classify, they are the certified bracket, and no instant inside it is
+    asserted: publishing a midpoint would manufacture precision the
+    determination does not have. Each is projected through the same
+    exact-instant projection every other route uses.
+
+    ``event`` is that same exact-instant projection of the sunset, and is
+    present only for GENUINE_SUNSET. It is the state /sunset-event-after
+    determines for the same instant and observer. It is null otherwise,
+    because a vanished night's minimum is not a sunset and is never published
+    as one.
+
+    ``nightStartKind`` keeps an unresolved tangency explicit rather than
+    resolving it either way.
+
+    EVIDENCE AND PROVENANCE
+
+    ``minimumAltitudeMarginDegrees`` is the least apparent-altitude margin
+    above the threshold sampled inside the bracket, null for a sunset.
+    ``eventThresholdDegrees`` and ``eventConvention`` name the event,
+    ``kernel`` and ``ephemerisRole`` the artifact, and
+    ``certifiedDomainLimitDegrees`` the domain the answer was certified
+    for.
+
+    No observer appears, as on every projection in this module. No
+    calendar meaning is produced: no rotation, no weekday, no day ordinal, no
+    Creation week and no Sabbath. Which Earth rotation contains a night-start
+    is a consumer's question.
+    """
+    return {
+        "nightStartKind": record.kind,
+        "nightStartLo": project_exact_instant(record.lo),
+        "nightStartHi": project_exact_instant(record.hi),
+        "event": (
+            None if record.event_tt is None
+            else project_exact_instant(record.event_tt)
+        ),
+        "minimumAltitudeMarginDegrees": record.minimum_margin_degrees,
+        "eventThresholdDegrees": record.event_threshold_degrees,
+        "eventConvention": record.event_convention,
+        "kernel": record.kernel,
+        "ephemerisRole": record.ephemeris_role,
+        "certifiedDomainLimitDegrees": record.certified_domain_limit_degrees,
+    }

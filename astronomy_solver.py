@@ -4229,3 +4229,637 @@ def _certified_first_sunset_after(frontier, anchor, latitude, longitude, is_sun_
             % (reported,)
         )
     return None
+
+
+# ---------------------------------------------------------------------------
+# DT-R4-A - certified night-start after an exact instant.
+#
+# WHAT THIS BLOCK ADDS
+#
+# One astronomical question: for one observer, where does the first night
+# strictly after an exact Terrestrial Time state begin? It is the evidence the
+# ratified R4 Creation-Week anchor rule consumes, and nothing more.
+#
+# The night-start of a night is its genuine sunset. Where polar day has
+# removed that night, the Sun's altitude still falls to a minimum and rises
+# again without reaching the threshold, and the instant of that minimum is
+# the night-start: it is the tangency limit into which a shrinking night's
+# sunset and sunrise converge before the night disappears (DT-O4).
+#
+#   GENUINE_SUNSET          the sunset /sunset-event-after determines,
+#                           bit for bit, with its DT-A1 certification
+#   VANISHED_NIGHT_MINIMUM  a certified bracket holding the altitude minimum
+#                           of a night certified absent
+#   TANGENCY_UNRESOLVED     a certified bracket holding the night-start of a
+#                           night too near tangency to classify
+#
+# A VANISHED NIGHT MINIMUM IS NOT A SUNSET. No sunset is fabricated, no
+# event is named a sunset that the certified predicate does not report as
+# one, and nothing here creates, counts or orders a canonical HPC day.
+#
+# NO CALENDAR, NO ROTATION INDEX
+#
+# The result is an instant or a bracket of instants. Carrier B, its local
+# mean 06:00 boundary, the rotation containing a night-start and every
+# weekday belong to a consumer, for the same reason earth_rotation.py
+# publishes UT1 rather than a mean-solar phase: they need a convention and a
+# meridian this Authority does not own.
+#
+# THE CERTIFIED SKELETON
+#
+# G(t) = sin(alt(t)) - sin(-0.8333 deg) is the DT-A1 margin, with its
+# governed bounds L1, L2, J1 and epsilon_G. The searched territory is
+# partitioned until each leaf is either certified monotone by the DT-A2
+# monotone theorem
+#
+#   |Gb - Ga| - 2e > L2 w^2/2 + m J1 w                      => G' != 0
+#
+# or is narrower than W_MIN, which is then CRITICAL. Consecutive monotone
+# leaves of one direction form a chain; a critical leaf may sit inside one.
+# Between a decreasing chain and the increasing chain after it, the least
+# value of G over both lies inside a critical leaf or at the corner where
+# they meet - never inside a leaf certified monotone. A critical leaf whose
+# cone lower bound exceeds the least value sampled at any candidate cannot
+# hold it and is pruned. The hull of the leaves that remain is the certified
+# bracket of that night's altitude minimum; nothing inside it is assumed.
+# The sign of G there is certified by the DT-A2 cone and quadratic theorems
+# with the governed 1e-6 degree band:
+#
+#   positive        the night has vanished; its minimum is the night-start
+#   negative        the night exists; its sunset precedes the minimum
+#   neither         tangency: the night-start lies in the bracket but its
+#                   kind is not established
+#
+# A setting crossing - a certified sign change from above to below the
+# threshold - that lies before or inside a minimum's bracket is the
+# night-start instead, and its instant is the DT-A1 sunset. A maximum is the
+# mirror image: certified below the threshold, the day has vanished.
+#
+# EARTH DEFLECTION. Skyfield applies the Earth's deflection only while the
+# Sun lies at least 0.8 of the limb angle from nadir, so its gate toggles
+# with the Sun about 18 degrees below the horizon, where G is near -0.29
+# (DT-A2). Positive-G territory never contains it. A gate artifact can
+# therefore only make a cluster appear where none is; that fails closed and
+# cannot produce a vanished night.
+#
+# DELTA-T KNOTS. G jumps at the pinned model's 19 value knots. A searched
+# territory touching a knot window is refused as AMBIGUOUS_DT_KNOT rather
+# than partitioned, because no consumer of this primitive needs those
+# instants.
+#
+# ORDERING, NOT INSTANT
+#
+# What the R4 consumer needs is that the night-start lies strictly after the
+# supplied instant and inside a known bracket. A sunset is ordered by the
+# DT-A1 strict comparison. A vanished minimum is ordered because the whole
+# cluster lies after a certified-decreasing run that begins at the instant.
+# When the instant falls inside the cluster itself - the single R4 seam on
+# each latitude circle - neither side can be certified and the request fails
+# closed as NIGHT_START_ORDER_AMBIGUOUS.
+#
+# CERTIFIED DOMAIN
+#
+# R4 is certified for |latitude| <= 89.739 degrees inclusive (DT-O3 / DT-O4).
+# Beyond it, and at the exact poles, the primitive refuses with
+# NIGHT_START_LATITUDE_UNCERTIFIED. The general sunset observer domain is not
+# narrowed by this.
+#
+# POLAR NIGHT
+#
+# Where the day has vanished the Sun never reaches the threshold and no
+# night begins. R4 ratifies only a genuine sunset and a vanished-night
+# minimum as night-starts, so that geometry is refused as
+# NIGHT_START_POLAR_NIGHT rather than given a third meaning. It cannot occur
+# at the 2019 anchor inside the certified domain.
+# ---------------------------------------------------------------------------
+
+REASON_NIGHT_START_LATITUDE_UNCERTIFIED = "NIGHT_START_LATITUDE_UNCERTIFIED"
+REASON_NIGHT_START_ORDER_AMBIGUOUS = "NIGHT_START_ORDER_AMBIGUOUS"
+REASON_NIGHT_START_POLAR_NIGHT = "NIGHT_START_POLAR_NIGHT"
+REASON_NIGHT_START_UNRESOLVED = "NIGHT_START_UNRESOLVED"
+
+NIGHT_START_GENUINE_SUNSET = "GENUINE_SUNSET"
+NIGHT_START_VANISHED_NIGHT_MINIMUM = "VANISHED_NIGHT_MINIMUM"
+NIGHT_START_TANGENCY_UNRESOLVED = "TANGENCY_UNRESOLVED"
+
+# The ratified R4 certified latitude domain, inclusive (DT-O3 Stage 4).
+NIGHT_START_LATITUDE_LIMIT_DEGREES = 89.739
+
+# The directional horizon, identical to /sunset-event-after's, so the
+# frontier both searches are admitted over - and the artifact answering
+# them - is one and the same. Inside the certified domain a night-start
+# occurs within one rotation of any instant.
+NIGHT_START_SEARCH_SPAN_DAYS = SUCCESSOR_SEARCH_SPAN_DAYS
+
+_RUN_DECREASING = "DECREASING"
+_RUN_INCREASING = "INCREASING"
+_RUN_CRITICAL = "CRITICAL"
+
+_SIGN_CROSSING = "CROSSING"
+
+
+@dataclass(frozen=True)
+class NightStart:
+    """The certified first night-start strictly after an instant.
+
+    ``kind`` is one of the three published night-start kinds. ``lo`` and
+    ``hi`` bound the night-start inclusively, and both lie strictly after the
+    instant searched from. For GENUINE_SUNSET they are equal to ``event_tt``,
+    the exact sunset state; for the other kinds ``event_tt`` is None, because
+    no event instant is certified.
+
+    ``minimum_margin_degrees`` is the least apparent-altitude margin above
+    the threshold sampled inside the bracket. It is evidence for an auditor,
+    not the certificate, which is ``kind``; it is None for a sunset.
+
+    The event threshold, its convention, the artifact and the certified
+    latitude limit travel with the answer, so it can never be read against
+    the wrong predicate or outside the domain it was certified for. No
+    observer appears, as on every other record here.
+    """
+
+    kind: str
+    lo: float
+    hi: float
+    event_tt: float | None
+    minimum_margin_degrees: float | None
+    kernel: str
+    ephemeris_role: str
+    event_threshold_degrees: float
+    event_convention: str
+    certified_domain_limit_degrees: float
+
+
+def _night_start_sign(value):
+    """+1 or -1 when G is sign-determinate under epsilon_G, otherwise 0."""
+    if value > DETECTION_EPSILON_G:
+        return 1
+    if value < -DETECTION_EPSILON_G:
+        return -1
+    return 0
+
+
+def _night_start_midpoint(margin, a, w):
+    """An interior split point, sign-determinate where one can be found.
+
+    The candidates are the DT-A1 enumerator's. Where none is determinate -
+    at a tangency, G is within epsilon_G of zero across all three - the
+    midpoint is returned anyway: the monotone theorem needs no determinate
+    sign, and a leaf bounded by an indeterminate value simply cannot have
+    its sign certified, which is the truthful outcome there.
+    """
+    for fraction in (0.5, 0.5 + 1.0 / 16.0, 0.5 - 1.0 / 16.0):
+        middle = a + w * fraction
+        g_middle = float(margin([middle])[0])
+        if _night_start_sign(g_middle):
+            return middle, g_middle
+    return a + w * 0.5, float(margin([a + w * 0.5])[0])
+
+
+def _night_start_leaves(margin, latitude, tt_lo, tt_hi):
+    """Partition [tt_lo, tt_hi] into certified-monotone and critical leaves.
+
+    Returns (kind, a, b, ga, gb) in ascending order. A leaf is DECREASING or
+    INCREASING when the DT-A2 monotone theorem certifies G' != 0 on it, and
+    CRITICAL when no leaf down to W_MIN can be certified.
+    """
+    cos_phi = abs(math.cos(math.radians(latitude)))
+    l2 = detection_l2(latitude)
+    j1 = DETECTION_J1_COEFFICIENT * cos_phi + 1e-16
+    eps = DETECTION_EPSILON_G
+
+    count = max(1, int(math.ceil((tt_hi - tt_lo) / DETECTION_W_SEED_DAYS)))
+    x = numpy.linspace(tt_lo, tt_hi, count + 1)
+    g = numpy.asarray(margin(x), dtype=float)
+
+    # Every internal seed point is made sign-determinate, as in DT-A1.
+    for i in range(1, count):
+        if not _night_start_sign(g[i]):
+            x[i], g[i] = _night_start_midpoint(
+                margin, x[i - 1], x[i + 1] - x[i - 1]
+            )
+
+    leaves = []
+    stack = [(float(x[i]), float(x[i + 1]), float(g[i]), float(g[i + 1]))
+             for i in range(count)]
+    while stack:
+        a, b, ga, gb = stack.pop()
+        w = b - a
+        if abs(gb - ga) - 2.0 * eps > (
+            l2 * w * w / 2.0 + DETECTION_SLOPE_BREAKS * j1 * w
+        ):
+            leaves.append(
+                (_RUN_DECREASING if gb < ga else _RUN_INCREASING, a, b, ga, gb)
+            )
+            continue
+        if w <= DETECTION_W_MIN_DAYS:
+            leaves.append((_RUN_CRITICAL, a, b, ga, gb))
+            continue
+        middle, g_middle = _night_start_midpoint(margin, a, w)
+        stack.append((a, middle, ga, g_middle))
+        stack.append((middle, b, g_middle, gb))
+
+    leaves.sort(key=lambda leaf: leaf[1])
+    return leaves
+
+
+def _night_start_turns(leaves, latitude):
+    """Locate every certified extremum of G between two monotone chains.
+
+    A chain is a maximal sequence of monotone leaves of one direction; a
+    critical leaf may sit inside it. Between a decreasing chain and the
+    increasing chain after it, G attains its least value over both chains at
+    a point inside a critical leaf or at the corner where the two chains
+    meet, never inside a leaf certified monotone. A critical leaf whose cone
+    lower bound already exceeds the least value sampled at any candidate
+    cannot hold that least value and is pruned, which removes leaves
+    belonging to the opposite extremum. The kept leaves' hull is the
+    certified bracket. A maximum is the mirror image.
+
+    Returns (kind, p, q, kept leaves, leading) in ascending order, kind
+    "MIN" or "MAX"; kept leaves are (a, b, ga, gb). ``leading`` marks a turn
+    whose earlier side lies before the instant and so was never examined.
+    """
+    l1 = detection_l1(latitude)
+    eps = DETECTION_EPSILON_G
+
+    chains = []
+    for index, (kind, _, _, _, _) in enumerate(leaves):
+        if kind == _RUN_CRITICAL:
+            continue
+        if chains and chains[-1][0] == kind:
+            chains[-1][2] = index
+        else:
+            chains.append([kind, index, index])
+
+    spans = []
+    if chains and chains[0][1] > 0:
+        spans.append((chains[0][0], 0, chains[0][2], None, True))
+    for before, after in zip(chains, chains[1:]):
+        corner = None
+        if before[2] + 1 == after[1]:
+            _, _, b, _, gb = leaves[before[2]]
+            corner = (b, b, gb, gb)
+        spans.append((after[0], before[1] + 1, after[2], corner, False))
+
+    turns = []
+    for following, first, last, corner, leading in spans:
+        candidates = [
+            (a, b, ga, gb)
+            for kind, a, b, ga, gb in leaves[first:last]
+            if kind == _RUN_CRITICAL
+        ]
+        if corner is not None:
+            candidates.append(corner)
+        if not candidates:
+            continue
+
+        if following == _RUN_INCREASING:
+            best = min(min(ga, gb) for _, _, ga, gb in candidates)
+            kept = [
+                leaf for leaf in candidates
+                if (leaf[2] + leaf[3] - l1 * (leaf[1] - leaf[0])) / 2.0 - eps
+                <= best
+            ]
+            kind = "MIN"
+        else:
+            best = max(max(ga, gb) for _, _, ga, gb in candidates)
+            kept = [
+                leaf for leaf in candidates
+                if (leaf[2] + leaf[3] + l1 * (leaf[1] - leaf[0])) / 2.0 + eps
+                >= best
+            ]
+            kind = "MAX"
+
+        kept.sort()
+        turns.append(
+            (kind, kept[0][0], max(b for _, b, _, _ in kept), kept, leading)
+        )
+
+    turns.sort(key=lambda turn: turn[1])
+    return turns
+
+
+def _night_start_cluster_sign(margin, latitude, cluster_leaves):
+    """Certify the sign of G over a critical cluster.
+
+    Returns (sign, least sampled G): sign is +1 or -1 when the DT-A2 cone or
+    quadratic theorem certifies G clear of the governed band on every leaf,
+    _SIGN_CROSSING when sign-determinate points of both signs exist (a
+    crossing, by continuity), and None when neither is established.
+    """
+    l1 = detection_l1(latitude)
+    l2 = detection_l2(latitude)
+    cos_phi = abs(math.cos(math.radians(latitude)))
+    j1 = DETECTION_J1_COEFFICIENT * cos_phi + 1e-16
+    eps = DETECTION_EPSILON_G
+    band = _DETECTION_BAND_G
+
+    signs, uncertified = set(), False
+    least = min(min(ga, gb) for _, _, ga, gb in cluster_leaves)
+    stack = list(cluster_leaves)
+    while stack:
+        a, b, ga, gb = stack.pop()
+        w = b - a
+        sa, sb = _night_start_sign(ga), _night_start_sign(gb)
+        signs.update(s for s in (sa, sb) if s)
+        if sa and sa == sb:
+            ma, mb = abs(ga) - band - eps, abs(gb) - band - eps
+            if ma > 0 and mb > 0 and (
+                ma + mb > l1 * w
+                or min(ma, mb) > l2 * w * w / 8.0
+                + DETECTION_SLOPE_BREAKS * j1 * w / 4.0
+            ):
+                continue
+        if sa and sb and sa != sb:
+            continue
+        if w <= DETECTION_W_MIN_DAYS:
+            uncertified = True
+            continue
+        middle, g_middle = _night_start_midpoint(margin, a, w)
+        least = min(least, g_middle)
+        stack.append((a, middle, ga, g_middle))
+        stack.append((middle, b, g_middle, gb))
+
+    if 1 in signs and -1 in signs:
+        return _SIGN_CROSSING, least
+    if uncertified or not signs:
+        return None, least
+    return signs.pop(), least
+
+
+def _night_start_margin_degrees(g_value):
+    """Apparent-altitude margin above the threshold, in degrees, from G."""
+    return math.degrees(
+        math.asin(max(-1.0, min(1.0, g_value + _DETECTION_S0)))
+    ) - EVENT_THRESHOLD_DEGREES
+
+
+def _locate_night_start(margin, latitude, anchor, horizon, first_sunset):
+    """Classify the first night-start strictly after ``anchor``.
+
+    ``margin`` is G over the frontier [anchor, horizon]. ``first_sunset`` is
+    a callable returning the DT-A1 first sunset strictly after the anchor;
+    it is called only when the certified skeleton places a setting crossing
+    first, so a vanished night never triggers a sunset search.
+
+    Returns (kind, lo, hi, event_tt, least G) or None when the frontier holds
+    no night-start. Raises SunsetChronologyError for every uncertified case.
+    """
+    leaves = _night_start_leaves(margin, latitude, anchor, horizon)
+    turns = _night_start_turns(leaves, latitude)
+
+    # The sign status of every critical leaf, certified once.
+    status = {}
+    for kind, a, b, ga, gb in leaves:
+        if kind == _RUN_CRITICAL:
+            status[(a, b)] = _night_start_cluster_sign(
+                margin, latitude, [(a, b, ga, gb)]
+            )
+    min_kept = {
+        (a, b) for kind, _, _, kept, _ in turns if kind == "MIN"
+        for a, b, _, _ in kept
+    }
+
+    # Every leaf that holds a setting crossing, or may, in ascending order.
+    # A critical leaf whose sign could not be certified and that no minimum
+    # bracket accounts for is an uncertified region of its own.
+    events = []
+    for index, (kind, a, b, ga, gb) in enumerate(leaves):
+        sa, sb = _night_start_sign(ga), _night_start_sign(gb)
+        if kind == _RUN_DECREASING:
+            # A decreasing leaf ending within epsilon_G of zero holds its
+            # crossing within epsilon_G / |G'| of that end, far inside the
+            # certified root finder's own convergence width.
+            if sb <= 0 and sa > 0:
+                events.append(("SET", a, b, False))
+            elif sb < 0 and sa == 0 and index == 0:
+                events.append(("SET", a, b, True))
+        elif kind == _RUN_CRITICAL:
+            sign = status[(a, b)][0]
+            crossing = sign == _SIGN_CROSSING
+            if (sa > 0 and (sb < 0 or crossing)) or (sb < 0 and crossing):
+                events.append(("SET", a, b, False))
+            elif sa == 0 and index == 0 and (sb < 0 or crossing):
+                events.append(("SET", a, b, True))
+            elif sign is None and (a, b) not in min_kept:
+                events.append(("UNCERTIFIED", a, b, False))
+    for turn in turns:
+        events.append(("TURN", turn[1], turn[2], turn))
+    events.sort(key=lambda event: (event[1], event[0] != "SET"))
+
+    resolved = []
+
+    def sunset_in(lo, hi, may_precede_anchor, fallback):
+        if not resolved:
+            try:
+                resolved.append(("EVENT", first_sunset()))
+            except SunsetChronologyError as error:
+                resolved.append(("ERROR", error))
+        outcome, value = resolved[0]
+        if outcome == "ERROR":
+            if (fallback is not None
+                    and value.reason == REASON_SUNSET_DETECTION_AMBIGUOUS):
+                return fallback
+            raise value
+        if (value is not None
+                and lo < value.tt <= hi + _FIND_DISCRETE_EPSILON_DAYS):
+            return (NIGHT_START_GENUINE_SUNSET, value.tt, value.tt, value.tt,
+                    None)
+        if may_precede_anchor:
+            return None
+        raise _detection_inconsistent(
+            "the certified night skeleton places a setting crossing in TT "
+            "%r .. %r but the certified sunset search reported %r"
+            % (lo, hi, None if value is None else value.tt)
+        )
+
+    # Below the threshold at the instant: the night in progress began
+    # earlier, so its minimum is not a night-start after the instant.
+    night_in_progress = _night_start_sign(float(margin([anchor])[0])) < 0
+    consumed = set()
+
+    for position, (kind, lo, hi, detail) in enumerate(events):
+        if (kind, lo, hi) in consumed:
+            continue
+
+        if kind == "SET":
+            found = sunset_in(lo, hi, detail, None)
+            if found is not None:
+                return found
+            night_in_progress = True
+            continue
+
+        if kind == "UNCERTIFIED":
+            raise SunsetChronologyError(
+                REASON_SUNSET_DETECTION_AMBIGUOUS,
+                "SUNSET DETECTION AMBIGUOUS - the region TT %r .. %r lies "
+                "within the governed band of the threshold" % (lo, hi),
+            )
+
+        turn_kind, p, q, kept, leading = detail
+
+        # A setting crossing inside this bracket comes before anything the
+        # bracket's extremum could decide: it is the night-start.
+        inside = [
+            event for event in events[position + 1:]
+            if event[0] == "SET" and event[1] < q
+        ]
+        if inside:
+            _, set_lo, set_hi, maybe = inside[0]
+            consumed.add(("SET", set_lo, set_hi))
+            fallback = None
+            if turn_kind == "MIN" and p > anchor:
+                fallback = (NIGHT_START_TANGENCY_UNRESOLVED, p, q, None,
+                            min(min(ga, gb) for _, _, ga, gb in kept))
+            found = sunset_in(set_lo, set_hi, maybe, fallback)
+            if found is not None:
+                return found
+            night_in_progress = True
+            continue
+
+        signs = [status.get((a, b), (None,))[0] if a != b
+                 else _night_start_sign(ga)
+                 for a, b, ga, _ in kept]
+        negative = any(s in (-1, _SIGN_CROSSING) for s in signs)
+        positive = any(s in (1, _SIGN_CROSSING) for s in signs)
+        unknown = any(s is None or s == 0 for s in signs)
+        least = min(min(ga, gb) for _, _, ga, gb in kept)
+
+        if turn_kind == "MAX":
+            night_was_in_progress = night_in_progress
+            if positive:
+                night_in_progress = False
+            if positive or leading:
+                continue
+            if unknown:
+                raise SunsetChronologyError(
+                    REASON_SUNSET_DETECTION_AMBIGUOUS,
+                    "SUNSET DETECTION AMBIGUOUS - the solar maximum at TT %r "
+                    ".. %r lies within the governed band of the threshold"
+                    % (p, q),
+                )
+            raise SunsetChronologyError(
+                REASON_NIGHT_START_POLAR_NIGHT,
+                "NIGHT START POLAR NIGHT - the Sun stays below the certified "
+                "threshold through its maximum at TT %r .. %r; no night "
+                "begins there%s" % (
+                    p, q, " either" if night_was_in_progress else "",
+                ),
+            )
+
+        if night_in_progress:
+            continue
+        if negative:
+            raise _detection_inconsistent(
+                "the minimum at TT %r .. %r lies below the threshold but no "
+                "setting crossing precedes it after the instant" % (p, q)
+            )
+        if p <= anchor:
+            raise SunsetChronologyError(
+                REASON_NIGHT_START_ORDER_AMBIGUOUS,
+                "NIGHT START ORDER AMBIGUOUS - the instant TT %r lies inside "
+                "the certified bracket TT %r .. %r of a night-start, so which "
+                "side of it the night begins cannot be certified"
+                % (anchor, p, q),
+            )
+        if unknown:
+            return (NIGHT_START_TANGENCY_UNRESOLVED, p, q, None, least)
+        return (NIGHT_START_VANISHED_NIGHT_MINIMUM, p, q, None, least)
+
+    return None
+
+
+def find_night_start_after(tt, latitude, longitude):
+    """Return the certified first night-start strictly after an exact state.
+
+    ``tt`` is an exact binary64 Terrestrial Time state. ``latitude`` and
+    ``longitude`` are the observer, validated against the governed geodetic
+    domain and then against the narrower R4 certified latitude domain.
+
+    Returns a NightStart. Fails closed with SunsetChronologyError, carrying
+    a stable reason, for a malformed state, an observer outside either
+    domain, exhausted coverage or computational reach, a Delta-T knot, any
+    DT-A1 detection ambiguity or inconsistency, an instant inside a
+    night-start bracket, polar night, or a frontier holding no night-start.
+
+    No HTTP semantics are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+    latitude = _governed_observer(
+        latitude, "latitude", OBSERVER_LATITUDE_DOMAIN
+    )
+    longitude = _governed_observer(
+        longitude, "longitude", OBSERVER_LONGITUDE_DOMAIN
+    )
+
+    if abs(latitude) > NIGHT_START_LATITUDE_LIMIT_DEGREES:
+        raise SunsetChronologyError(
+            REASON_NIGHT_START_LATITUDE_UNCERTIFIED,
+            "NIGHT START LATITUDE UNCERTIFIED - the night-start is certified "
+            "only for |latitude| <= %r degrees, received %r"
+            % (NIGHT_START_LATITUDE_LIMIT_DEGREES, latitude),
+        )
+
+    frontier = supported_search_frontier(
+        anchor, anchor + NIGHT_START_SEARCH_SPAN_DAYS, latitude, longitude
+    )
+
+    for knot in DETECTION_DT_KNOT_TT:
+        if (knot + DETECTION_DT_KNOT_HALF_GAP_DAYS >= frontier.tt_lo
+                and knot - DETECTION_DT_KNOT_HALF_GAP_DAYS <= frontier.tt_hi):
+            raise SunsetChronologyError(
+                REASON_SUNSET_DETECTION_AMBIGUOUS_DT_KNOT,
+                "SUNSET DETECTION AMBIGUOUS - the night-start frontier TT %r "
+                ".. %r contains the Delta-T value knot at TT %r"
+                % (frontier.tt_lo, frontier.tt_hi, knot),
+            )
+
+    margin = _detection_margin(frontier.kernel, latitude, longitude)
+
+    def first_sunset():
+        return find_sunset_from_instant(anchor, latitude, longitude)
+
+    try:
+        located = _locate_night_start(
+            margin, latitude, frontier.tt_lo, frontier.tt_hi, first_sunset
+        )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no "
+            "night-start is reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    if located is None:
+        if not frontier.complete:
+            raise SunsetChronologyError(
+                frontier.truncation_reason,
+                "NIGHT START FRONTIER EXHAUSTED - no night-start was "
+                "certified before the supported frontier ended at TT %r"
+                % (frontier.tt_hi,),
+            )
+        raise SunsetChronologyError(
+            REASON_NIGHT_START_UNRESOLVED,
+            "NIGHT START UNRESOLVED - no night-start was certified within "
+            "TT %r .. %r" % (frontier.tt_lo, frontier.tt_hi),
+        )
+
+    kind, lo, hi, event_tt, least = located
+    return NightStart(
+        kind=kind,
+        lo=lo,
+        hi=hi,
+        event_tt=event_tt,
+        minimum_margin_degrees=(
+            None if least is None else _night_start_margin_degrees(least)
+        ),
+        kernel=frontier.kernel,
+        ephemeris_role=_EPHEMERIS_ROLE_BY_KERNEL[frontier.kernel],
+        event_threshold_degrees=EVENT_THRESHOLD_DEGREES,
+        event_convention=EVENT_CONVENTION,
+        certified_domain_limit_degrees=NIGHT_START_LATITUDE_LIMIT_DEGREES,
+    )

@@ -1139,7 +1139,7 @@ class TestExistingContractsUnchanged(unittest.TestCase):
     # owns the closed world as of that increment.
     POST_A3C4_ROUTES = frozenset({
         "/sunset-count", "/scientific-environment", "/earth-rotation",
-        "/solar-regime",
+        "/solar-regime", "/night-start-after",
     })
 
     def test_a3c4_added_exactly_one_application_route(self):

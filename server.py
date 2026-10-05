@@ -24,6 +24,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     solar_longitude,
     subsolar_point,
     find_equinox,
+    find_night_start_after,
     find_season_events,
     find_sunset_utc,
     find_next_sunset_after_utc,
@@ -38,6 +39,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
 )
 from astronomical_event_transport import (  # noqa: E402 - gate runs first
     project_astronomical_event,
+    project_night_start,
     project_solar_regime,
     project_sunset_bracket,
     project_sunset_count,
@@ -1313,3 +1315,95 @@ def solar_regime(
         ) from error
 
     return project_solar_regime(record)
+
+
+# ---------------------------------------------------------------------------
+# DT-R4-A - certified night-start route.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The HTTP surface for one published question: where does the first night
+# strictly after an exact Terrestrial Time state begin, for one observer? It
+# is the astronomical evidence the ratified R4 Creation-Week anchor rule
+# consumes. The answer is a kind and a certified bracket: a genuine sunset,
+# or - where polar day has removed that night - the altitude minimum the
+# vanished night collapsed into, or an explicitly unresolved tangency.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# The route decodes an exact anchor, hands it and the observer to the
+# published solver, and projects whatever comes back. It runs no search,
+# selects no artifact, enforces no domain of its own and re-derives none of
+# the scientific decisions, which all stay where they were certified.
+#
+# NO CALENDAR MEANING
+#
+# No Earth-rotation index, local mean time, weekday, Creation week, Sabbath
+# or HPC day is produced, and a vanished night's minimum is never published
+# as a sunset. Which Carrier-B rotation contains a night-start is decided by
+# a consumer, which owns that convention.
+#
+# THE ANCHOR IS BITS, NOT A DECIMAL
+#
+# Exactly as /sunset-event-after: ttBits is the IEEE-754 spelling of the
+# exact binary64 state, and there is deliberately no tt parameter, no UTC,
+# no civil date and no kernel selector.
+#
+# TWO FAILURES, KEPT APART
+#
+# A malformed ttBits is a TRANSPORT failure and reports the transport
+# reason. A state that was received and then refused by the substrate - a
+# malformed instant, an observer outside the geodetic domain or outside the
+# narrower certified R4 latitude domain, exhausted coverage or computational
+# reach, a Delta-T knot, a detection ambiguity or inconsistency, an instant
+# inside a night-start bracket, polar night, or a frontier holding no
+# night-start - reports the substrate's own stable reason, unchanged, at 400.
+#
+# Only those two exception types are caught. An unexpected failure is not a
+# governed rejection and must stay visible rather than be relabelled as one.
+#
+# SCIENTIFIC ENVIRONMENT
+#
+# Stateless, exactly as the rest of the exact layer is.
+#
+# ADDITIVE
+#
+# No existing route is touched, no existing solver is modified and no
+# existing astronomical answer changes.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/night-start-after")
+def night_start_after(ttBits: str, latitude: float, longitude: float):
+    """Return the certified first night-start strictly after an exact state.
+
+    ``ttBits`` is the IEEE-754 spelling of the exact binary64 Terrestrial
+    Time anchor. ``latitude`` and ``longitude`` are the observer, validated
+    by the substrate against the governed geodetic domain and the certified
+    R4 latitude domain, and not re-validated or normalized here.
+
+    Returns the night-start projection: its kind, its certified bracket, the
+    sunset event for a genuine sunset, the sampled altitude-margin evidence,
+    the event threshold and convention, the artifact and its role, and the
+    certified latitude limit.
+
+    Fails closed with HTTP 400 carrying a stable reason, for a malformed
+    anchor or for the substrate's own governed refusal.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        record = find_night_start_after(anchor, latitude, longitude)
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_night_start(record)
