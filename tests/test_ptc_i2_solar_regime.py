@@ -952,7 +952,9 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     #
     # Each entry is owned by the increment that added it, and its own suite
     # owns the closed world as of that increment.
-    POST_PTC_I2_ROUTES = frozenset({"/night-start-after", "/solar-crossing"})
+    POST_PTC_I2_ROUTES = frozenset({
+        "/night-start-after", "/solar-crossing", "/civil-instant",
+    })
 
     def test_every_previously_published_route_is_still_registered(self):
         routes = registered_routes()

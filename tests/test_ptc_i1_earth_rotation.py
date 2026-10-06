@@ -462,6 +462,7 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     # owns the closed world as of that increment.
     POST_PTC_I1_ROUTES = frozenset({
         "/solar-regime", "/night-start-after", "/solar-crossing",
+        "/civil-instant",
     })
 
     def test_this_increment_added_exactly_one_route(self):

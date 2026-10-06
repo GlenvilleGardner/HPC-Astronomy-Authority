@@ -1140,6 +1140,7 @@ class TestExistingContractsUnchanged(unittest.TestCase):
     POST_A3C4_ROUTES = frozenset({
         "/sunset-count", "/scientific-environment", "/earth-rotation",
         "/solar-regime", "/night-start-after", "/solar-crossing",
+        "/civil-instant",
     })
 
     def test_a3c4_added_exactly_one_application_route(self):

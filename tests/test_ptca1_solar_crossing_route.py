@@ -336,11 +336,17 @@ class TestPublishedSurface(unittest.TestCase):
                 self.assertIn(path, routes)
                 self.assertEqual(routes[path][1], name)
 
+    # Application routes added by governed increments AFTER PTC-A1. Each is
+    # owned by the increment that added it, whose own suite owns the closed
+    # world as of that increment; subtracting them keeps PTC-A1's claim
+    # exactly as strong as it was.
+    POST_PTC_A1_ROUTES = frozenset({"/civil-instant"})
+
     def test_this_increment_added_exactly_one_route(self):
         published = {
             path for path in registered_routes()
             if not path.startswith(("/openapi", "/docs", "/redoc"))
-        }
+        } - self.POST_PTC_A1_ROUTES
         self.assertEqual(published - set(PREVIOUS), {ROUTE_PATH})
 
     def test_the_scientific_environment_generation_is_unchanged(self):

@@ -67,6 +67,11 @@ from earth_rotation import (  # noqa: E402 - deliberate: gate runs first
     EarthRotationError,
     earth_rotation_evidence,
 )
+from civil_instant import (  # noqa: E402 - deliberate: gate runs first
+    REASON_CIVIL_INSTANT_INVALID,
+    CivilInstantError,
+    resolve_civil_instant,
+)
 
 # Establish this process's scientific identity before it can serve anything.
 #
@@ -1512,3 +1517,66 @@ def solar_crossing(
         ) from error
 
     return project_solar_crossing(record)
+
+
+# ---------------------------------------------------------------------------
+# PTC-T2 - exact civil-instant resolver route.
+#
+# The marker deliberately does NOT obey the repository's governed block
+# grammar, for the same reason as PTC-I2: A5 asserts that it is the terminal
+# governed block.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The exact Terrestrial Time identity of one civil UTC instant, so that a
+# presentation client holding only a civil clock reading can call the exact
+# routes without owning any time-scale science. The conversion is the one the
+# UTC-input routes above have always performed; only its result is new on the
+# wire.
+#
+# WHAT IT IS NOT
+#
+# Not a Deep-Time, BCE or chronology converter. Instants outside the civil span
+# certified by the pinned time-scale artifact are refused, not extrapolated.
+#
+# ADDITIVE
+#
+# No existing route is touched, no existing solver is modified and no
+# astronomical answer changes.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/civil-instant")
+def civil_instant(utc: str):
+    """Return the exact Terrestrial Time identity of a civil UTC instant.
+
+    ``utc`` is an ISO 8601 civil instant, read by the same parser as every
+    other UTC-input route: an offset is honoured and normalized to UTC, and an
+    instant without one is read as UTC.
+
+    Returns the resolved instant in the standard exact projection, the instant
+    as parsed, the inclusive certified civil span, and the scientific
+    environment that performed the conversion.
+
+    Fails closed with HTTP 400 carrying a stable reason, for an unparseable
+    instant or for one outside the certified civil span.
+    """
+    try:
+        requested = parse_utc_datetime(utc)
+    except (ValueError, OverflowError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(
+                REASON_CIVIL_INSTANT_INVALID,
+                "CIVIL INSTANT INVALID - the instant is not a representable "
+                "ISO 8601 civil timestamp",
+            ),
+        ) from error
+
+    try:
+        return resolve_civil_instant(requested)
+    except CivilInstantError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error

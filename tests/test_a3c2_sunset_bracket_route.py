@@ -170,6 +170,7 @@ POST_A3C2_ROUTES = frozenset({
     "/solar-regime",
     "/night-start-after",
     "/solar-crossing",
+    "/civil-instant",
 })
 
 
