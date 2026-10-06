@@ -393,7 +393,7 @@ class TestTransportIsolation(unittest.TestCase):
              "project_astronomical_event", "project_sunset_event",
              "project_sunset_bracket", "reason_detail",
              "project_sunset_count", "project_solar_regime",
-             "project_night_start"],
+             "project_night_start", "project_solar_crossing"],
         )
         self.assertEqual(
             [n.name for n in tree.body if isinstance(n, ast.ClassDef)], []

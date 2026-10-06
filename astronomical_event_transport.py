@@ -419,3 +419,61 @@ def project_night_start(record):
         "ephemerisRole": record.ephemeris_role,
         "certifiedDomainLimitDegrees": record.certified_domain_limit_degrees,
     }
+
+
+def project_solar_crossing(record):
+    """Return the wire projection of a certified directional solar crossing.
+
+    ``record`` is a published SolarCrossing. Its orientation, direction,
+    event, bounds, completeness and provenance are carried through unchanged;
+    nothing is recomputed, reinterpreted or renamed, and the record itself is
+    not modified.
+
+    THE EVENT, OR CERTIFIED NOTHING
+
+    ``event`` is the exact-instant projection of the requested crossing. It
+    is null only when the frontier was COMPLETE and holds no requested
+    crossing - the certified statement that the searched territory contains
+    none. The key is always present, so a consumer can never confuse "no
+    crossing" with "a projection that forgot one".
+
+    THE REQUEST AND WHAT WAS COVERED
+
+    ``requested`` carries the caller's anchor, the exact state the admitted
+    horizon reaches, and the horizon in days. ``covered`` is the frontier
+    actually examined, with ``complete`` and ``truncationReason`` saying
+    whether it was the whole request. Every instant is projected through the
+    same exact-instant projection every other route uses.
+
+    ``orientation`` and ``direction`` echo the governed spellings, so an
+    answer can never be read against the wrong question.
+    ``eventThresholdDegrees`` and ``eventConvention`` name the predicate the
+    crossing is of, and ``kernel`` and ``ephemerisRole`` the artifact.
+
+    No observer appears, as on every projection in this module. No calendar
+    or polar meaning is produced: a crossing is not named a polar sunrise or
+    sunset here, and no rotation, weekday, Creation week or HPC day appears.
+    """
+    return {
+        "orientation": record.orientation,
+        "direction": record.direction,
+        "event": (
+            None if record.event_tt is None
+            else project_exact_instant(record.event_tt)
+        ),
+        "requested": {
+            "anchor": project_exact_instant(record.anchor),
+            "horizon": project_exact_instant(record.requested_bound),
+            "horizonDays": record.horizon_days,
+        },
+        "covered": {
+            "lo": project_exact_instant(record.covered_lo),
+            "hi": project_exact_instant(record.covered_hi),
+        },
+        "complete": record.complete,
+        "truncationReason": record.truncation_reason,
+        "eventThresholdDegrees": record.event_threshold_degrees,
+        "eventConvention": record.event_convention,
+        "kernel": record.kernel,
+        "ephemerisRole": record.ephemeris_role,
+    }

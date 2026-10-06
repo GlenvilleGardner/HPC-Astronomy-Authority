@@ -26,6 +26,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
     find_equinox,
     find_night_start_after,
     find_season_events,
+    find_solar_crossing,
     find_sunset_utc,
     find_next_sunset_after_utc,
     find_solar_longitude_event_after,
@@ -40,6 +41,7 @@ from astronomy_solver import (  # noqa: E402 - deliberate: gate runs first
 from astronomical_event_transport import (  # noqa: E402 - gate runs first
     project_astronomical_event,
     project_night_start,
+    project_solar_crossing,
     project_solar_regime,
     project_sunset_bracket,
     project_sunset_count,
@@ -1407,3 +1409,106 @@ def night_start_after(ttBits: str, latitude: float, longitude: float):
         ) from error
 
     return project_night_start(record)
+
+
+# ---------------------------------------------------------------------------
+# PTC-A1 - certified directional solar-crossing route.
+#
+# The marker deliberately does NOT obey the repository's governed block
+# grammar, exactly as the PTC-I1, PTC-I2 and DT-R4-A markers above do not:
+# the A5 block remains the terminal governed A block.
+#
+# WHAT THIS ROUTE ADDS
+#
+# The HTTP surface for one published question: for one observer, where is
+# the requested genuine solar horizon crossing - RISING or SETTING - AFTER or
+# BEFORE an exact Terrestrial Time state, inside a governed horizon? It is the
+# first published sunrise, and the first certified backward search.
+#
+# NO ASTRONOMY HAPPENS HERE
+#
+# The route decodes an exact anchor, hands it, the observer, the orientation,
+# the direction and the horizon to the published solver, and projects
+# whatever comes back. It runs no search, selects no artifact, applies no
+# resource bound or domain policy of its own and re-derives none of the
+# scientific decisions, which all stay where they were certified.
+#
+# ABSENCE IS AN ANSWER, AND IT IS 200
+#
+# A complete frontier holding no requested crossing is a successful
+# determination, reported with a null event. This deliberately differs from
+# /sunset-event-after, whose 404 is unchanged: this contract states its
+# frontier and its completeness on every answer, so "certifiably none here"
+# is a fact about the searched territory rather than a missing resource. An
+# incomplete frontier holding none is never reported that way - the solver
+# refuses it with the reason its territory ran out.
+#
+# TWO FAILURES, KEPT APART
+#
+# A malformed ttBits is a TRANSPORT failure and reports the transport
+# reason. Anything the substrate refuses - a malformed instant, an
+# unpublished orientation or direction, an invalid or over-long horizon, an
+# observer outside the geodetic domain, exhausted coverage or computational
+# reach, a Delta-T knot, a detection ambiguity or inconsistency - reports the
+# substrate's own stable reason, unchanged, at 400.
+#
+# Only those two exception types are caught. An unexpected failure is not a
+# governed rejection and must stay visible rather than be relabelled as one.
+#
+# NO CALENDAR MEANING
+#
+# No rotation, weekday, Creation week, Sabbath, HPC day, polar regime or
+# continuity state is produced. Which polar event a crossing is belongs to a
+# consumer.
+#
+# ADDITIVE
+#
+# No existing route is touched, no existing solver is modified and no
+# existing astronomical answer changes.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/solar-crossing")
+def solar_crossing(
+    ttBits: str,
+    latitude: float,
+    longitude: float,
+    orientation: str,
+    direction: str,
+    horizonDays: float,
+):
+    """Return the certified directional solar crossing for an exact state.
+
+    ``ttBits`` is the IEEE-754 spelling of the exact binary64 Terrestrial
+    Time anchor. ``latitude`` and ``longitude`` are the observer, validated
+    by the substrate against the governed geodetic domain and not
+    re-validated or normalized here. ``orientation`` is RISING or SETTING,
+    ``direction`` AFTER or BEFORE, and ``horizonDays`` the horizon searched
+    in that direction.
+
+    Returns the crossing projection: the requested crossing or a null event
+    over a complete frontier, the request, the frontier covered and its
+    completeness, the event threshold and convention, and the artifact.
+
+    Fails closed with HTTP 400 carrying a stable reason, for a malformed
+    anchor or for the substrate's own governed refusal.
+    """
+    try:
+        anchor = decode_tt_bits(ttBits)
+    except ExactTimeTransportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    try:
+        record = find_solar_crossing(
+            anchor, latitude, longitude, orientation, direction, horizonDays
+        )
+    except SunsetChronologyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=reason_detail(error.reason, str(error)),
+        ) from error
+
+    return project_solar_crossing(record)

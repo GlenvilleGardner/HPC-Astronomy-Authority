@@ -4863,3 +4863,679 @@ def find_night_start_after(tt, latitude, longitude):
         event_convention=EVENT_CONVENTION,
         certified_domain_limit_degrees=NIGHT_START_LATITUDE_LIMIT_DEGREES,
     )
+
+
+# ---------------------------------------------------------------------------
+# PTC-A1 - certified directional solar crossing.
+#
+# The marker deliberately does NOT obey the repository's governed block
+# grammar (^# A\d+[a-z]?(?:-[0-9a-z]+)? - ), exactly as the PTC-I2, DT-A1 and
+# DT-R4-A markers above do not: the A4 block is the terminal governed A block
+# and its closed-world claims must stay true.
+#
+# WHAT THIS BLOCK ADDS
+#
+# One astronomical question: for one observer, where is the requested genuine
+# solar horizon crossing - a sunrise or a sunset - relative to an exact
+# Terrestrial Time state, inside a governed directional horizon?
+#
+#   orientation  RISING   an upward crossing of the certified predicate
+#                SETTING  a downward crossing of the identical predicate
+#   direction    AFTER    the earliest such crossing strictly after the anchor
+#                BEFORE   the latest such crossing strictly before the anchor
+#
+# THE PREDICATE IS UNCHANGED
+#
+# A crossing is a sign change of the predicate almanac.sunrise_sunset already
+# certifies: the Sun's centre, apparent, topocentric, at the published
+# EVENT_THRESHOLD_DEGREES. A sunrise is that predicate's upward crossing and a
+# sunset its downward crossing. No second threshold, no civil convention, no
+# terrain and no refraction model are introduced.
+#
+# THE PROOF IS REUSED, NOT RESTATED
+#
+# The DT-A2 / DT-A2C certified structure already partitions a territory into
+# leaves that each hold no crossing or exactly one crossing of a known
+# orientation, and it already returns the rising brackets beside the setting
+# ones. Nothing here re-derives a bound, a theorem or a constant: the
+# structure, the margin and the frontier substrate are called unchanged. What
+# is added is only the orientation-aware selection around them - matching the
+# root finder's reports to certified brackets, refining a bracket the root
+# finder missed, clearing an anchor that sits in the boundary guard, and
+# choosing the first or last crossing - each a direct generalization of the
+# DT-A1 sunset wrapper. The DT-A1 sunset wrapper itself is not modified.
+#
+# For SETTING / AFTER over the same three-day frontier the selection below is
+# the DT-A1 sunset selection, step for step, so it reports the identical
+# state /sunset-event-after reports.
+#
+# BOTH DIRECTIONS ARE CERTIFIED
+#
+# BEFORE runs on the same certified structure as AFTER. It is NOT built on
+# the A2-3b predecessor, which uses the root finder alone; that solver and the
+# bracket route that consumes it are left exactly as they are.
+#
+# STRICT ORDERING, AND AN ANCHOR AT A CROSSING
+#
+# AFTER qualifies a crossing only when it lies strictly after the anchor, and
+# BEFORE only when it lies strictly before it, with no minimum gap and no
+# nearest-event heuristic.
+#
+# The certified root finder reports a crossing at the upper end of its
+# converged bracket, so a reported root is a state on the far side of its own
+# crossing, at most one convergence width later than the crossing itself. An
+# anchor that is such a root therefore lies on or within one convergence width
+# after its crossing. AFTER excludes that crossing by the predicate's own
+# value at the anchor, as DT-A1 does.
+#
+# BEFORE needs a representation-level identity rule, not a temporal gap. The
+# convergence width, _FIND_DISCRETE_EPSILON_DAYS (1 ms), is the resolution at
+# which a crossing's state is reported; it is NOT a minimum separation BEFORE
+# requires. Refined from a different bracket, the same physical crossing is
+# reported at a slightly different binary64 state - a few units in the last
+# place apart - so a literal comparison against an anchor that is that
+# crossing's own report can rediscover it. A crossing whose refined state lies
+# within one convergence width before the anchor is therefore identified as
+# the anchor's own crossing at the published resolution - the same
+# report-to-crossing association the DT-A1 matcher already makes - and it
+# belongs to neither direction. The search continues to the crossing before
+# it.
+#
+# The rule cannot suppress a distinct crossing. BEFORE returns only from
+# territory the DT-A2 structure certified, where two same-orientation
+# crossings are separated by an opposite crossing lying inside its own
+# certified leaf, and every certified leaf is wider than
+# 0.4375 * DETECTION_W_MIN_DAYS (about 0.577 s): a leaf is split only above
+# W_MIN, at fractions no smaller than 0.5 - 1/16. At most one crossing of the
+# requested orientation can therefore lie inside the 1 ms identity window. No
+# two determinations are compared for identity.
+#
+# ABSENCE IS AN ANSWER; INCOMPLETENESS IS NOT
+#
+# A complete frontier that holds no requested crossing returns a record with
+# no event: the certified statement that the searched territory contains none.
+# A frontier that stopped short and holds none raises the reason its
+# territory ran out, so a truncated search is never reported as an empty sky.
+# A crossing found inside a shortened frontier is a complete answer to the
+# nearest-crossing question, because the territory from the anchor through it
+# was examined continuously, and it is returned with the truncation recorded.
+#
+# TANGENCY IS NOT A CROSSING
+#
+# Where the certified structure cannot exclude a crossing between the anchor
+# and the first one it does certify, the search fails closed with the DT-A1
+# detection reason. A grazing extremum is never reported as a sunrise or a
+# sunset, and no crossing is synthesized, interpolated or chosen as nearest.
+# The DT-A1 reasons name the certified predicate, which is the same for both
+# orientations, so they are reused unchanged rather than duplicated.
+#
+# THE HORIZON IS A RESOURCE BOUND
+#
+# A request names its own horizon, finite, positive and at most
+# SOLAR_CROSSING_MAX_HORIZON_DAYS. The bound matches the count and regime
+# admission bounds and spans a polar season; it is a statement about what one
+# determination will cost, not about where crossings can occur. An invalid
+# horizon is refused, never clamped.
+#
+# NO CALENDAR, NO POLAR STATE
+#
+# The result is an instant or nothing. No rotation, weekday, Creation week,
+# Sabbath, HPC day, year, polar regime label or continuity state is produced:
+# which polar event a crossing is, and what it means for a calendar, belong to
+# a consumer.
+# ---------------------------------------------------------------------------
+
+REASON_SOLAR_CROSSING_ORIENTATION_INVALID = "SOLAR_CROSSING_ORIENTATION_INVALID"
+REASON_SOLAR_CROSSING_DIRECTION_INVALID = "SOLAR_CROSSING_DIRECTION_INVALID"
+REASON_SOLAR_CROSSING_HORIZON_INVALID = "SOLAR_CROSSING_HORIZON_INVALID"
+REASON_SOLAR_CROSSING_HORIZON_TOO_LONG = "SOLAR_CROSSING_HORIZON_TOO_LONG"
+
+SOLAR_CROSSING_RISING = "RISING"
+SOLAR_CROSSING_SETTING = "SETTING"
+SOLAR_CROSSING_AFTER = "AFTER"
+SOLAR_CROSSING_BEFORE = "BEFORE"
+
+# A RESOURCE ADMISSION BOUND, NOT A SCIENTIFIC ONE, with the same value and
+# the same reasoning as COUNT_MAX_SPAN_DAYS and REGIME_MAX_SPAN_DAYS. It is a
+# separate constant so that changing what this route admits cannot silently
+# change what the others admit.
+SOLAR_CROSSING_MAX_HORIZON_DAYS = 400.0
+
+
+@dataclass(frozen=True)
+class SolarCrossing:
+    """The certified directional solar crossing for one request.
+
+    ``event_tt`` is the exact state of the requested crossing, read from the
+    certified root finder exactly as every published sunset is, or None when
+    the complete frontier holds no requested crossing.
+
+    ``anchor`` is the caller's exact state, never moved. ``horizon_days`` is
+    the admitted horizon and ``requested_bound`` the exact state it reaches,
+    after the anchor for AFTER and before it for BEFORE. ``covered_lo`` and
+    ``covered_hi`` are the frontier actually examined; ``complete`` is True
+    only when it is the whole request, and ``truncation_reason`` is None
+    exactly then.
+
+    No observer appears, as on every record in this module.
+    """
+
+    orientation: str
+    direction: str
+    event_tt: float | None
+    anchor: float
+    horizon_days: float
+    requested_bound: float
+    covered_lo: float
+    covered_hi: float
+    complete: bool
+    truncation_reason: str | None
+    kernel: str
+    ephemeris_role: str
+    event_threshold_degrees: float
+    event_convention: str
+
+
+def _governed_crossing_choice(value, choices, reason, field):
+    """Return ``value`` when it is one of the published spellings."""
+    if not isinstance(value, str) or value not in choices:
+        raise SunsetChronologyError(
+            reason,
+            "SOLAR CROSSING %s INVALID - %r is not one of %s"
+            % (field.upper(), value, ", ".join(choices)),
+        )
+    return value
+
+
+def _governed_crossing_horizon(horizon_days):
+    """Return the admitted horizon in days, or refuse it unaltered."""
+    if (isinstance(horizon_days, bool)
+            or not isinstance(horizon_days, (int, float))):
+        raise SunsetChronologyError(
+            REASON_SOLAR_CROSSING_HORIZON_INVALID,
+            "SOLAR CROSSING HORIZON INVALID - the horizon %r is not a number"
+            % (horizon_days,),
+        )
+
+    horizon = float(horizon_days)
+
+    if not math.isfinite(horizon) or not horizon > 0.0:
+        raise SunsetChronologyError(
+            REASON_SOLAR_CROSSING_HORIZON_INVALID,
+            "SOLAR CROSSING HORIZON INVALID - the horizon must be a finite "
+            "positive number of days, received %r" % (horizon_days,),
+        )
+
+    if horizon > SOLAR_CROSSING_MAX_HORIZON_DAYS:
+        raise SunsetChronologyError(
+            REASON_SOLAR_CROSSING_HORIZON_TOO_LONG,
+            "SOLAR CROSSING HORIZON TOO LONG - the requested horizon spans %r "
+            "days, and one crossing determination admits at most %r"
+            % (horizon, SOLAR_CROSSING_MAX_HORIZON_DAYS),
+        )
+
+    return horizon
+
+
+def _crossing_is_requested(sun_is_up_after, orientation):
+    """Whether a root-finder transition has the requested orientation.
+
+    The root finder reports the predicate's value AFTER each transition: up
+    after a sunrise, down after a sunset.
+    """
+    return bool(sun_is_up_after) == (orientation == SOLAR_CROSSING_RISING)
+
+
+def _certified_brackets(structure, orientation):
+    """The certified brackets of the requested orientation, ascending."""
+    if orientation == SOLAR_CROSSING_RISING:
+        return structure.rising
+    return structure.setting
+
+
+def _refine_missed_crossing(is_sun_up, bracket_lo, bracket_hi, orientation):
+    """Locate the one certified crossing the root finder missed.
+
+    The DT-A1 refinement, for either orientation: the certified root finder
+    over the certified bracket alone, which must resolve exactly one
+    transition of the requested orientation or the search fails closed.
+    """
+    times, events = almanac.find_discrete(
+        ts.tt_jd(bracket_lo), ts.tt_jd(bracket_hi), is_sun_up
+    )
+    if len(times) != 1 or not _crossing_is_requested(events[0], orientation):
+        raise _detection_inconsistent(
+            "the certified %s bracket TT %r .. %r resolved %d transitions "
+            "under the certified predicate"
+            % (orientation.lower(), bracket_lo, bracket_hi, len(times))
+        )
+    return float(times[0].tt)
+
+
+def _monotone_window(margin, latitude, near, far, g_near):
+    """G at ``far`` when the window between two states is certified monotone.
+
+    The DT-A2 monotone theorem, exactly as the DT-A1 anchor clearing applies
+    it. Returns None when ``far`` is not sign-determinate or the window is
+    not certified monotone.
+    """
+    cos_phi = abs(math.cos(math.radians(latitude)))
+    l2 = detection_l2(latitude)
+    j1 = DETECTION_J1_COEFFICIENT * cos_phi + 1e-16
+    eps = DETECTION_EPSILON_G
+    width = abs(far - near)
+    g_far = margin([far])[0]
+
+    if abs(g_far) > eps and (
+        abs(g_far - g_near) - 2.0 * eps
+        > l2 * width * width / 2.0 + DETECTION_SLOPE_BREAKS * j1 * width
+    ):
+        return g_far
+    return None
+
+
+def _clear_crossing_anchor_after(margin, latitude, anchor, horizon, is_sun_up,
+                                 orientation):
+    """The DT-A1 anchor clearing, forward, for either orientation.
+
+    Returns ("FOUND", end) when a requested crossing lies strictly after the
+    anchor inside [anchor, end], ("CLEAR", end) when none does, or None when
+    no window up to W_SEED certifies the anchor's neighbourhood. Which side of
+    the anchor the window's single crossing lies on is decided by the
+    certified predicate's own value at the anchor.
+    """
+    g_anchor = margin([anchor])[0]
+    width = DETECTION_W_MIN_DAYS
+
+    while width <= DETECTION_W_SEED_DAYS:
+        end = anchor + width
+        if end >= horizon:
+            return None
+        if any(anchor - DETECTION_DT_KNOT_HALF_GAP_DAYS <= knot <= end
+               + DETECTION_DT_KNOT_HALF_GAP_DAYS for knot in DETECTION_DT_KNOT_TT):
+            return None
+        g_end = _monotone_window(margin, latitude, anchor, end, g_anchor)
+        if g_end is not None:
+            if orientation == SOLAR_CROSSING_RISING:
+                requested = g_end > g_anchor
+                before_crossing = not bool(is_sun_up(ts.tt_jd(anchor)))
+            else:
+                requested = g_end < g_anchor
+                before_crossing = bool(is_sun_up(ts.tt_jd(anchor)))
+            if requested and before_crossing:
+                return ("FOUND", end)
+            return ("CLEAR", end)
+        width *= 2.0
+
+    return None
+
+
+def _clear_crossing_anchor_before(margin, latitude, anchor, horizon, is_sun_up,
+                                  orientation):
+    """The DT-A1 anchor clearing, mirrored backward.
+
+    Returns ("FOUND", start) when the anchor lies on the far side of a
+    requested crossing inside [start, anchor], ("CLEAR", start) when no
+    requested crossing precedes the anchor there, or None when no window up
+    to W_SEED certifies the anchor's neighbourhood. No sample lies after the
+    anchor.
+    """
+    g_anchor = margin([anchor])[0]
+    width = DETECTION_W_MIN_DAYS
+
+    while width <= DETECTION_W_SEED_DAYS:
+        start = anchor - width
+        if start <= horizon:
+            return None
+        if any(start - DETECTION_DT_KNOT_HALF_GAP_DAYS <= knot <= anchor
+               + DETECTION_DT_KNOT_HALF_GAP_DAYS for knot in DETECTION_DT_KNOT_TT):
+            return None
+        g_start = _monotone_window(margin, latitude, anchor, start, g_anchor)
+        if g_start is not None:
+            if orientation == SOLAR_CROSSING_RISING:
+                requested = g_anchor > g_start
+                past_crossing = bool(is_sun_up(ts.tt_jd(anchor)))
+            else:
+                requested = g_anchor < g_start
+                past_crossing = not bool(is_sun_up(ts.tt_jd(anchor)))
+            if requested and past_crossing:
+                return ("FOUND", start)
+            return ("CLEAR", start)
+        width *= 2.0
+
+    return None
+
+
+def _certified_first_crossing_after(frontier, anchor, latitude, longitude,
+                                    is_sun_up, reported, orientation):
+    """Return the certified earliest requested crossing after ``anchor``.
+
+    The DT-A1 first-sunset selection, generalized to either orientation and
+    otherwise unchanged. ``reported`` is the root finder's earliest requested
+    crossing strictly after the anchor inside the frontier, or None. None is
+    returned only when the whole frontier is certified to hold no requested
+    crossing; an uncertified neighbourhood before the first certified one
+    raises its ambiguity.
+    """
+    margin = _detection_margin(frontier.kernel, latitude, longitude)
+    lo, hi = anchor, frontier.tt_hi
+
+    if abs(margin([lo])[0]) <= DETECTION_BOUNDARY_GUARD:
+        cleared = _clear_crossing_anchor_after(
+            margin, latitude, lo, hi, is_sun_up, orientation
+        )
+        if cleared is None:
+            raise SunsetChronologyError(
+                REASON_SUNSET_DETECTION_AMBIGUOUS,
+                "SUNSET DETECTION AMBIGUOUS - the anchor TT %r lies within "
+                "the governed boundary guard of a crossing that could not be "
+                "certified" % (anchor,),
+            )
+        outcome, end = cleared
+        if outcome == "FOUND":
+            if (reported is not None
+                    and anchor < reported <= end + _FIND_DISCRETE_EPSILON_DAYS):
+                return reported
+            times, events = almanac.find_discrete(
+                ts.tt_jd(anchor), ts.tt_jd(end), is_sun_up
+            )
+            found = [float(t.tt) for t, up in zip(times, events)
+                     if _crossing_is_requested(up, orientation)
+                     and float(t.tt) > anchor]
+            if len(found) != 1:
+                raise _detection_inconsistent(
+                    "the anchor window TT %r .. %r resolved %d %s transitions"
+                    % (anchor, end, len(found), orientation.lower())
+                )
+            return found[0]
+        lo = end
+
+    ambiguities = []
+    if abs(margin([hi])[0]) <= DETECTION_EPSILON_G:
+        moved = hi
+        while abs(margin([moved])[0]) <= DETECTION_EPSILON_G:
+            moved -= DETECTION_W_MIN_DAYS
+            if moved <= lo:
+                raise SunsetChronologyError(
+                    REASON_SUNSET_DETECTION_AMBIGUOUS,
+                    "SUNSET DETECTION AMBIGUOUS - the directional horizon is "
+                    "indeterminate",
+                )
+        ambiguities.append(("AMBIGUOUS_BOUNDARY", moved, hi))
+        hi = moved
+
+    structure = _certified_sunset_structure(
+        margin, latitude, lo, hi, DETECTION_EPSILON_G
+    )
+    ambiguities.extend(structure.ambiguities)
+    brackets = _certified_brackets(structure, orientation)
+
+    if brackets:
+        first_lo, first_hi = brackets[0]
+        earlier = [item for item in ambiguities if item[1] < first_lo]
+        if earlier:
+            raise SunsetChronologyError(
+                _ambiguity_reason(earlier),
+                "SUNSET DETECTION AMBIGUOUS - an uncertified region precedes "
+                "the first certified %s crossing after the anchor TT %r"
+                % (orientation.lower(), anchor),
+            )
+        if reported is not None:
+            if first_lo < reported <= first_hi + _FIND_DISCRETE_EPSILON_DAYS:
+                return reported
+            if reported <= first_lo:
+                raise _detection_inconsistent(
+                    "the reported %s crossing TT %r precedes every certified "
+                    "bracket of that orientation"
+                    % (orientation.lower(), reported)
+                )
+        return _refine_missed_crossing(is_sun_up, first_lo, first_hi, orientation)
+
+    if ambiguities:
+        raise SunsetChronologyError(
+            _ambiguity_reason(ambiguities),
+            "SUNSET DETECTION AMBIGUOUS - no %s crossing is certified after "
+            "the anchor TT %r and an uncertified region remains"
+            % (orientation.lower(), anchor),
+        )
+    if reported is not None:
+        raise _detection_inconsistent(
+            "the reported %s crossing TT %r lies in no certified bracket"
+            % (orientation.lower(), reported)
+        )
+    return None
+
+
+def _strictly_before(candidate, anchor):
+    """Whether a refined crossing is a crossing strictly before the anchor.
+
+    A REPRESENTATION-LEVEL IDENTITY RULE, NOT A MINIMUM GAP. A crossing whose
+    refined state lies within one root-finder convergence width
+    (_FIND_DISCRETE_EPSILON_DAYS, the 1 ms reporting resolution) before the
+    anchor is the anchor's own crossing - the anchor is a state that
+    crossing's report can occupy when refined from another bracket - and so
+    is not a crossing before it. Every distinct crossing is returned by its
+    literal order: the certified structure separates same-orientation
+    crossings by more than 0.4375 * DETECTION_W_MIN_DAYS (about 0.577 s), so
+    no second crossing of the requested orientation can lie inside the window.
+    """
+    return candidate < anchor and anchor - candidate > _FIND_DISCRETE_EPSILON_DAYS
+
+
+def _certified_last_crossing_before(frontier, anchor, latitude, longitude,
+                                    is_sun_up, reported, orientation):
+    """Return the certified latest requested crossing before ``anchor``.
+
+    The mirror of the forward selection over the same certified structure.
+    ``reported`` holds the root finder's requested crossings strictly before
+    the anchor inside the frontier, ascending. None is returned only when the
+    whole frontier is certified to hold no requested crossing before the
+    anchor; an uncertified region after the last certified one raises its
+    ambiguity.
+    """
+    margin = _detection_margin(frontier.kernel, latitude, longitude)
+    lo, hi = frontier.tt_lo, anchor
+
+    if abs(margin([hi])[0]) <= DETECTION_BOUNDARY_GUARD:
+        cleared = _clear_crossing_anchor_before(
+            margin, latitude, hi, lo, is_sun_up, orientation
+        )
+        if cleared is None:
+            raise SunsetChronologyError(
+                REASON_SUNSET_DETECTION_AMBIGUOUS,
+                "SUNSET DETECTION AMBIGUOUS - the anchor TT %r lies within "
+                "the governed boundary guard of a crossing that could not be "
+                "certified" % (anchor,),
+            )
+        outcome, start = cleared
+        if outcome == "FOUND":
+            inside = [value for value in reported if start < value < anchor]
+            if not inside:
+                times, events = almanac.find_discrete(
+                    ts.tt_jd(start), ts.tt_jd(anchor), is_sun_up
+                )
+                inside = [float(t.tt) for t, up in zip(times, events)
+                          if _crossing_is_requested(up, orientation)
+                          and float(t.tt) < anchor]
+            if len(inside) > 1:
+                raise _detection_inconsistent(
+                    "the anchor window TT %r .. %r resolved %d %s transitions"
+                    % (start, anchor, len(inside), orientation.lower())
+                )
+            if inside and _strictly_before(inside[0], anchor):
+                return inside[0]
+        hi = start
+
+    ambiguities = []
+    if abs(margin([lo])[0]) <= DETECTION_EPSILON_G:
+        moved = lo
+        while abs(margin([moved])[0]) <= DETECTION_EPSILON_G:
+            moved += DETECTION_W_MIN_DAYS
+            if moved >= hi:
+                raise SunsetChronologyError(
+                    REASON_SUNSET_DETECTION_AMBIGUOUS,
+                    "SUNSET DETECTION AMBIGUOUS - the directional horizon is "
+                    "indeterminate",
+                )
+        ambiguities.append(("AMBIGUOUS_BOUNDARY", lo, moved))
+        lo = moved
+
+    structure = _certified_sunset_structure(
+        margin, latitude, lo, hi, DETECTION_EPSILON_G
+    )
+    ambiguities.extend(structure.ambiguities)
+    brackets = _certified_brackets(structure, orientation)
+    pending = [value for value in reported if lo < value <= hi]
+
+    for bracket_lo, bracket_hi in reversed(brackets):
+        later = [item for item in ambiguities if item[2] > bracket_hi]
+        if later:
+            raise SunsetChronologyError(
+                _ambiguity_reason(later),
+                "SUNSET DETECTION AMBIGUOUS - an uncertified region follows "
+                "the last certified %s crossing before the anchor TT %r"
+                % (orientation.lower(), anchor),
+            )
+        beyond = [value for value in pending
+                  if value > bracket_hi + _FIND_DISCRETE_EPSILON_DAYS]
+        if beyond:
+            raise _detection_inconsistent(
+                "the reported %s crossing TT %r follows every certified "
+                "bracket of that orientation before the anchor"
+                % (orientation.lower(), beyond[-1])
+            )
+        inside = _match_reported((bracket_lo, bracket_hi), pending)
+        if len(inside) > 1:
+            raise _detection_inconsistent(
+                "two reported %s crossings lie in one certified bracket "
+                "TT %r .. %r" % (orientation.lower(), bracket_lo, bracket_hi)
+            )
+        candidate = (
+            inside[0] if inside
+            else _refine_missed_crossing(
+                is_sun_up, bracket_lo, bracket_hi, orientation
+            )
+        )
+        if _strictly_before(candidate, anchor):
+            return candidate
+        pending = [value for value in pending if value <= bracket_lo]
+
+    if ambiguities:
+        raise SunsetChronologyError(
+            _ambiguity_reason(ambiguities),
+            "SUNSET DETECTION AMBIGUOUS - no %s crossing is certified before "
+            "the anchor TT %r and an uncertified region remains"
+            % (orientation.lower(), anchor),
+        )
+    if pending:
+        raise _detection_inconsistent(
+            "the reported %s crossing TT %r lies in no certified bracket"
+            % (orientation.lower(), pending[-1])
+        )
+    return None
+
+
+def find_solar_crossing(tt, latitude, longitude, orientation, direction,
+                        horizon_days):
+    """Return the certified directional solar crossing for one observer.
+
+    ``tt`` is an exact binary64 Terrestrial Time state and is never moved.
+    ``orientation`` is RISING or SETTING, ``direction`` AFTER or BEFORE, and
+    ``horizon_days`` the finite positive horizon, at most
+    SOLAR_CROSSING_MAX_HORIZON_DAYS, searched in that direction.
+
+    Returns a SolarCrossing. Its event is the requested crossing, or None when
+    the complete frontier certifiably holds none.
+
+    Fails closed with SunsetChronologyError, carrying a stable reason, for a
+    malformed state, an unpublished orientation or direction, an invalid or
+    over-long horizon, an observer outside the governed geodetic domain,
+    exhausted coverage or computational reach before any crossing was found,
+    a Delta-T knot, or any DT-A1 detection ambiguity or inconsistency.
+
+    No HTTP semantics are decided here.
+    """
+    anchor = _exact_finite_tt(tt, "anchor tt")
+    orientation = _governed_crossing_choice(
+        orientation, (SOLAR_CROSSING_RISING, SOLAR_CROSSING_SETTING),
+        REASON_SOLAR_CROSSING_ORIENTATION_INVALID, "orientation",
+    )
+    direction = _governed_crossing_choice(
+        direction, (SOLAR_CROSSING_AFTER, SOLAR_CROSSING_BEFORE),
+        REASON_SOLAR_CROSSING_DIRECTION_INVALID, "direction",
+    )
+    horizon_days = _governed_crossing_horizon(horizon_days)
+
+    forward = direction == SOLAR_CROSSING_AFTER
+    bound = anchor + horizon_days if forward else anchor - horizon_days
+
+    frontier = supported_search_frontier(anchor, bound, latitude, longitude)
+
+    is_sun_up = almanac.sunrise_sunset(
+        load_kernel(frontier.kernel), wgs84.latlon(latitude, longitude)
+    )
+
+    # The frontier was admitted by probing this same computation at both of
+    # its endpoints, so a failure in here is not expected. If one occurs the
+    # examined territory is no longer whole, and the only honest response is
+    # to fail closed.
+    try:
+        times, events = almanac.find_discrete(
+            ts.tt_jd(frontier.tt_lo), ts.tt_jd(frontier.tt_hi), is_sun_up
+        )
+        requested = [
+            float(t.tt) for t, up in zip(times, events)
+            if _crossing_is_requested(up, orientation)
+        ]
+
+        if forward:
+            reported = next(
+                (value for value in requested if value > anchor), None
+            )
+            event_tt = _certified_first_crossing_after(
+                frontier, anchor, latitude, longitude, is_sun_up, reported,
+                orientation,
+            )
+        else:
+            reported = [value for value in requested if value < anchor]
+            event_tt = _certified_last_crossing_before(
+                frontier, anchor, latitude, longitude, is_sun_up, reported,
+                orientation,
+            )
+    except EphemerisRangeError as error:
+        raise SunsetChronologyError(
+            REASON_EPHEMERIS_REACH_EXHAUSTED,
+            "EPHEMERIS REACH EXHAUSTED - the certified topocentric solar "
+            "computation failed inside the supported frontier TT %r .. %r "
+            "under %s; the examined territory is not whole, so no crossing is "
+            "reported"
+            % (frontier.tt_lo, frontier.tt_hi, frontier.kernel),
+        ) from error
+
+    if event_tt is None and not frontier.complete:
+        raise SunsetChronologyError(
+            frontier.truncation_reason,
+            "SOLAR CROSSING UNRESOLVED - no %s crossing lies %s the anchor "
+            "state TT %r inside the supported frontier TT %r .. %r, and that "
+            "frontier stopped short of the requested horizon, so the absence "
+            "of a crossing is not established"
+            % (orientation.lower(), "after" if forward else "before", anchor,
+               frontier.tt_lo, frontier.tt_hi),
+        )
+
+    return SolarCrossing(
+        orientation=orientation,
+        direction=direction,
+        event_tt=event_tt,
+        anchor=anchor,
+        horizon_days=horizon_days,
+        requested_bound=bound,
+        covered_lo=frontier.tt_lo,
+        covered_hi=frontier.tt_hi,
+        complete=frontier.complete,
+        truncation_reason=frontier.truncation_reason,
+        kernel=frontier.kernel,
+        ephemeris_role=_EPHEMERIS_ROLE_BY_KERNEL[frontier.kernel],
+        event_threshold_degrees=EVENT_THRESHOLD_DEGREES,
+        event_convention=EVENT_CONVENTION,
+    )

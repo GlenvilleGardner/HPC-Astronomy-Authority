@@ -891,7 +891,7 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     # claim exactly as strong as it was while letting it stay true.
     POST_A4_ROUTES = frozenset({
         "/scientific-environment", "/earth-rotation", "/solar-regime",
-        "/night-start-after",
+        "/night-start-after", "/solar-crossing",
     })
 
     def test_exactly_one_route_was_added(self):

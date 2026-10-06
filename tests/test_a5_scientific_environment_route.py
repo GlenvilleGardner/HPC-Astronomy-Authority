@@ -692,6 +692,7 @@ class TestPublishedRoutesPreserved(unittest.TestCase):
     # owns the closed world as of that increment.
     POST_A5_ROUTES = frozenset({
         "/earth-rotation", "/solar-regime", "/night-start-after",
+        "/solar-crossing",
     })
 
     def test_exactly_one_route_was_added(self):
